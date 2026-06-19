@@ -134,13 +134,7 @@ The app starts Node by invoking `node` from `PATH`, so local development and pac
 
 ## Setup
 
-From the repository root:
-
-```powershell
-cd .\SatisfactoryNodeEditor
-```
-
-Install the save worker dependency:
+From the repository root, install the save worker dependency:
 
 ```powershell
 cd .\src\SaveWorker
