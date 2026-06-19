@@ -237,15 +237,25 @@
                                        TextWrapping="Wrap"
                                        TextAlignment="Center"
                                        FontWeight="SemiBold" />
-                            <Button Command="{Binding ToggleCompatibilityGuideCommand}"
-                                    Style="{StaticResource LinkButton}"
-                                    HorizontalAlignment="Right"
-                                    Margin="0,10,0,0">
-                                <TextBlock Text="I'm sorry, what?"
-                                           Foreground="#FF8FD8FF"
-                                           TextDecorations="Underline"
-                                           FontWeight="SemiBold" />
-                            </Button>
+                            <StackPanel Orientation="Horizontal"
+                                        HorizontalAlignment="Right"
+                                        Margin="0,10,0,0">
+                                <Button Command="{Binding CopyLogsCommand}"
+                                        Style="{StaticResource LinkButton}"
+                                        Margin="0,0,14,0">
+                                    <TextBlock Text="Copy logs"
+                                               Foreground="#FF8FD8FF"
+                                               TextDecorations="Underline"
+                                               FontWeight="SemiBold" />
+                                </Button>
+                                <Button Command="{Binding ToggleCompatibilityGuideCommand}"
+                                        Style="{StaticResource LinkButton}">
+                                    <TextBlock Text="I'm sorry, what?"
+                                               Foreground="#FF8FD8FF"
+                                               TextDecorations="Underline"
+                                               FontWeight="SemiBold" />
+                                </Button>
+                            </StackPanel>
                         </StackPanel>
                     </Border>
                 </StackPanel>
@@ -1021,8 +1031,10 @@
                                     Command="{Binding SupportCommand}"
                                     Padding="10,5" />
                         </Grid>
-                        <TextBox Grid.Row="1"
-                                 Text="{Binding LogText, Mode=OneWay}"
+                        <TextBox x:Name="LogTextBox"
+                                 Grid.Row="1"
+                                 Text="{Binding LogText, Mode=OneWay, NotifyOnTargetUpdated=True}"
+                                 TargetUpdated="LogTextBox_TargetUpdated"
                                  FontFamily="Consolas"
                                  FontSize="12"
                                  Foreground="{DynamicResource AppTextBrush}"

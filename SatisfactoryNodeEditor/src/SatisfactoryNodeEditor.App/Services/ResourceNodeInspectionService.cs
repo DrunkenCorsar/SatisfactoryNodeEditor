@@ -156,7 +156,7 @@ public sealed class ResourceNodeInspectionService
             return "This save could not be parsed safely. The file appears to have a save-body layout that the current parser cannot read, or it may have been externally renamed, edited, or incompletely written. Try loading it in Satisfactory and saving it again, then load that fresh save here.";
         }
 
-        return $"Node inspection failed with exit code {exitCode}. See the log for parser details.";
+        return $"Could not inspect this save. The save worker stopped with exit code {exitCode}, and no changes were written.";
     }
 
     private static string FormatNodeCounts(IReadOnlyDictionary<string, int> counts) =>

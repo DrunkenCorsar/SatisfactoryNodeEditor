@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Threading;
 using System.IO;
@@ -86,5 +87,10 @@ public partial class MainWindow : Window
 
         savePath = files.FirstOrDefault(file => Path.GetExtension(file).Equals(".sav", StringComparison.OrdinalIgnoreCase)) ?? string.Empty;
         return !string.IsNullOrWhiteSpace(savePath) && File.Exists(savePath);
+    }
+
+    private void LogTextBox_TargetUpdated(object? sender, DataTransferEventArgs e)
+    {
+        LogTextBox.ScrollToEnd();
     }
 }

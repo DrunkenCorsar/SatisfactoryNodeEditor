@@ -9,11 +9,21 @@ public static class SaveWorkerRuntime
         var baseDirectory = AppContext.BaseDirectory;
         var candidates = new[]
         {
-            Path.Combine(baseDirectory, "SaveWorker", scriptName),
-            Path.GetFullPath(Path.Combine(baseDirectory, "..", "..", "..", "..", "SaveWorker", scriptName))
+            Path.GetFullPath(Path.Combine(baseDirectory, "..", "..", "..", "..", "SaveWorker", scriptName)),
+            Path.Combine(baseDirectory, "SaveWorker", scriptName)
         };
 
-        return candidates.FirstOrDefault(File.Exists);
+        return candidates
+            .Where(File.Exists)
+            .OrderByDescending(HasInstalledDependencies)
+            .FirstOrDefault();
+    }
+
+    private static bool HasInstalledDependencies(string scriptPath)
+    {
+        var workerDirectory = Path.GetDirectoryName(scriptPath);
+        return !string.IsNullOrWhiteSpace(workerDirectory) &&
+            Directory.Exists(Path.Combine(workerDirectory, "node_modules"));
     }
 
     public static string ResolveNodeExecutable()
