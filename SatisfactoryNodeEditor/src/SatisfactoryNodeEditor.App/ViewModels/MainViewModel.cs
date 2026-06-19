@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
+using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Windows;
@@ -23,6 +24,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private string _loadErrorMessage = string.Empty;
     private string _guideImageOverlaySource = string.Empty;
     private bool _isCompatibilityGuideVisible;
+    private bool _isSafetyNoticeVisible = !HasAcceptedSafetyNotice();
     private bool _showDefaultResourceCounts;
     private bool _isBusy;
     private bool _hasUnsavedShuffle;
@@ -67,6 +69,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
         CopyLogsCommand = new RelayCommand(CopyLogsAsync, () => !string.IsNullOrWhiteSpace(LogText));
         ClearLogCommand = new RelayCommand(ClearLogAsync);
         SupportCommand = new RelayCommand(OpenSupportAsync);
+        OpenGitHubCommand = new RelayCommand(OpenGitHubAsync);
+        AcceptSafetyNoticeCommand = new RelayCommand(AcceptSafetyNoticeAsync);
         ToggleCompatibilityGuideCommand = new RelayCommand(ToggleCompatibilityGuideAsync);
         ToggleGuideImageCommand = new RelayCommand<string>(ToggleGuideImageAsync);
         InitializePerResourcePurityDistributions();
@@ -92,6 +96,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public RelayCommand CopyLogsCommand { get; }
     public RelayCommand ClearLogCommand { get; }
     public RelayCommand SupportCommand { get; }
+    public RelayCommand OpenGitHubCommand { get; }
+    public RelayCommand AcceptSafetyNoticeCommand { get; }
     public RelayCommand ToggleCompatibilityGuideCommand { get; }
     public RelayCommand<string> ToggleGuideImageCommand { get; }
     public ObservableCollection<ResourceCountOption> ResourceCounts { get; } = [];
@@ -189,6 +195,12 @@ public sealed class MainViewModel : INotifyPropertyChanged
         private set => SetField(ref _isCompatibilityGuideVisible, value);
     }
 
+    public bool IsSafetyNoticeVisible
+    {
+        get => _isSafetyNoticeVisible;
+        private set => SetField(ref _isSafetyNoticeVisible, value);
+    }
+
     public double ClusteringValue
     {
         get => _clusteringValue;
@@ -258,14 +270,14 @@ public sealed class MainViewModel : INotifyPropertyChanged
             {
                 OnPropertyChanged(nameof(IsShuffleTabSelected));
                 OnPropertyChanged(nameof(IsMapBrushTabSelected));
-                OnPropertyChanged(nameof(IsWellsAndGeysersTabSelected));
+                OnPropertyChanged(nameof(IsAboutTabSelected));
                 OnPropertyChanged(nameof(IsPerResourcePurityPanelVisible));
                 OnPropertyChanged(nameof(ShuffleTabBrush));
                 OnPropertyChanged(nameof(MapBrushTabBrush));
-                OnPropertyChanged(nameof(WellsAndGeysersTabBrush));
+                OnPropertyChanged(nameof(AboutTabBrush));
                 OnPropertyChanged(nameof(ShuffleTabTextBrush));
                 OnPropertyChanged(nameof(MapBrushTabTextBrush));
-                OnPropertyChanged(nameof(WellsAndGeysersTabTextBrush));
+                OnPropertyChanged(nameof(AboutTabTextBrush));
             }
         }
     }
@@ -274,21 +286,25 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     public bool IsMapBrushTabSelected => SelectedEditorTab.Equals("MapBrush", StringComparison.OrdinalIgnoreCase);
 
-    public bool IsWellsAndGeysersTabSelected => SelectedEditorTab.Equals("WellsAndGeysers", StringComparison.OrdinalIgnoreCase);
+    public bool IsAboutTabSelected => SelectedEditorTab.Equals("About", StringComparison.OrdinalIgnoreCase);
 
     public bool IsPerResourcePurityPanelVisible => IsShuffleTabSelected && IsPerResourcePurityMode;
+
+    public string AppVersion { get; } = GetDisplayVersion();
+
+    public string WindowTitle => $"Satisfactory Node Editor v{AppVersion}";
 
     public Brush ShuffleTabBrush => GetTabButtonBrush(IsShuffleTabSelected);
 
     public Brush MapBrushTabBrush => GetTabButtonBrush(IsMapBrushTabSelected);
 
-    public Brush WellsAndGeysersTabBrush => GetTabButtonBrush(IsWellsAndGeysersTabSelected);
+    public Brush AboutTabBrush => GetTabButtonBrush(IsAboutTabSelected);
 
     public Brush ShuffleTabTextBrush => GetTabTextBrush(IsShuffleTabSelected);
 
     public Brush MapBrushTabTextBrush => GetTabTextBrush(IsMapBrushTabSelected);
 
-    public Brush WellsAndGeysersTabTextBrush => GetTabTextBrush(IsWellsAndGeysersTabSelected);
+    public Brush AboutTabTextBrush => GetTabTextBrush(IsAboutTabSelected);
 
     public int CurrentTotalNodes => ResourceCounts.Sum(option => option.Count);
 
@@ -424,6 +440,18 @@ public sealed class MainViewModel : INotifyPropertyChanged
             return;
         }
 
+        if (!Path.GetExtension(selectedPath).Equals(".sav", StringComparison.OrdinalIgnoreCase))
+        {
+            LoadErrorMessage = "Only Satisfactory .sav files can be loaded.";
+            AppendLog("Load save skipped", $"""
+                {LoadErrorMessage}
+
+                Selected path:
+                {selectedPath}
+                """);
+            return;
+        }
+
         var previousInputSavePath = InputSavePath;
         var previousOutputSavePath = OutputSavePath;
         var previousHasLoadedSave = HasLoadedSave;
@@ -513,6 +541,23 @@ public sealed class MainViewModel : INotifyPropertyChanged
         return Task.CompletedTask;
     }
 
+    private Task AcceptSafetyNoticeAsync()
+    {
+        try
+        {
+            var path = GetSafetyNoticeAcceptedPath();
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, DateTimeOffset.Now.ToString("O"));
+        }
+        catch (Exception ex)
+        {
+            AppendLog("Safety notice acceptance could not be saved", ex.Message);
+        }
+
+        IsSafetyNoticeVisible = false;
+        return Task.CompletedTask;
+    }
+
     private Task ToggleGuideImageAsync(string? imageSource)
     {
         if (string.IsNullOrWhiteSpace(imageSource) || GuideImageOverlaySource.Equals(imageSource, StringComparison.OrdinalIgnoreCase))
@@ -597,6 +642,17 @@ public sealed class MainViewModel : INotifyPropertyChanged
         if (string.IsNullOrWhiteSpace(selectedOutputPath))
         {
             AppendLog("Save cancelled", "No output path was selected.");
+            return;
+        }
+
+        if (!Path.GetExtension(selectedOutputPath).Equals(".sav", StringComparison.OrdinalIgnoreCase))
+        {
+            AppendLog("Save cancelled", $"""
+                Output file must use the .sav extension.
+
+                Selected path:
+                {selectedOutputPath}
+                """);
             return;
         }
 
@@ -727,7 +783,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         SelectedEditorTab = tabName switch
         {
             "MapBrush" => "MapBrush",
-            "WellsAndGeysers" => "WellsAndGeysers",
+            "About" => "About",
             _ => "Shuffle"
         };
         AppendLog("Editor tab changed", SelectedEditorTab);
@@ -762,6 +818,26 @@ public sealed class MainViewModel : INotifyPropertyChanged
         AppendLog("Support link opened", "https://discord.gg/w8hqmrmn5J");
 
         return Task.CompletedTask;
+    }
+
+    private Task OpenGitHubAsync()
+    {
+        Process.Start(new ProcessStartInfo
+        {
+            FileName = "https://github.com/DrunkenCorsar/SatisfactoryNodeEditor",
+            UseShellExecute = true
+        });
+        AppendLog("GitHub link opened", "https://github.com/DrunkenCorsar/SatisfactoryNodeEditor");
+
+        return Task.CompletedTask;
+    }
+
+    private static string GetDisplayVersion()
+    {
+        var version = Assembly.GetExecutingAssembly().GetName().Version;
+        return version is null
+            ? "0.1.0"
+            : $"{version.Major}.{version.Minor}.{version.Build}";
     }
 
     private void ResetResourceCounts(IReadOnlyDictionary<string, int> counts)
@@ -1095,11 +1171,33 @@ public sealed class MainViewModel : INotifyPropertyChanged
             Candidate nodes found: {result.CandidateNodesFound}
             Nodes changed: {result.NodesChanged}
             Output save: {result.OutputSavePath}
+            Backup save: {FormatBackupPath(result.BackupSavePath)}
 
             {result.Log}
             {result.ErrorMessage}
             """.Trim();
     }
+
+    private static string FormatBackupPath(string backupPath) =>
+        string.IsNullOrWhiteSpace(backupPath) ? "Not created" : backupPath;
+
+    private static bool HasAcceptedSafetyNotice()
+    {
+        try
+        {
+            return File.Exists(GetSafetyNoticeAcceptedPath());
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static string GetSafetyNoticeAcceptedPath() => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "SatisfactoryNodeEditor",
+        "settings",
+        "safety-notice-0.1.0.accepted");
 
     private bool SetField<T>(ref T field, T value, [CallerMemberName] string? propertyName = null)
     {

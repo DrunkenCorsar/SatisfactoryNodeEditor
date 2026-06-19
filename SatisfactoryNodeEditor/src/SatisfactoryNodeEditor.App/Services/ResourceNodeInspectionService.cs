@@ -27,7 +27,7 @@ public sealed class ResourceNodeInspectionService
             return ResourceNodeInspectionResult.Failure($"Input save does not exist: {inputSavePath}");
         }
 
-        var workerPath = ResolveWorkerPath();
+        var workerPath = SaveWorkerRuntime.ResolveWorkerScript("inspect-nodes.js");
         if (workerPath is null)
         {
             return ResourceNodeInspectionResult.Failure("Could not find SaveWorker/inspect-nodes.js beside the app or in the source tree.");
@@ -36,7 +36,7 @@ public sealed class ResourceNodeInspectionService
         var outputPath = Path.Combine(Path.GetTempPath(), $"satisfactory-nodes-{Guid.NewGuid():N}.json");
         var startInfo = new ProcessStartInfo
         {
-            FileName = "node",
+            FileName = SaveWorkerRuntime.ResolveNodeExecutable(),
             WorkingDirectory = Path.GetDirectoryName(workerPath)!,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
@@ -72,7 +72,7 @@ public sealed class ResourceNodeInspectionService
         }
         catch (Exception ex)
         {
-            return ResourceNodeInspectionResult.Failure($"Failed to start Node worker. Is Node.js installed? {ex.Message}");
+            return ResourceNodeInspectionResult.Failure(SaveWorkerRuntime.FormatNodeStartFailure(ex));
         }
 
         process.BeginOutputReadLine();
@@ -164,18 +164,6 @@ public sealed class ResourceNodeInspectionService
             .OrderByDescending(pair => pair.Value)
             .ThenBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase)
             .Select(pair => $"{pair.Key}={pair.Value}"));
-
-    private static string? ResolveWorkerPath()
-    {
-        var baseDirectory = AppContext.BaseDirectory;
-        var candidates = new[]
-        {
-            Path.GetFullPath(Path.Combine(baseDirectory, "..", "..", "..", "..", "SaveWorker", "inspect-nodes.js")),
-            Path.Combine(baseDirectory, "SaveWorker", "inspect-nodes.js")
-        };
-
-        return candidates.FirstOrDefault(File.Exists);
-    }
 
     private static void TryDelete(string path)
     {

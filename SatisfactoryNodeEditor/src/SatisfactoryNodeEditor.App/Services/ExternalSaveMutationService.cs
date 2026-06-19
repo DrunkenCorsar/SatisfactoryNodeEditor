@@ -25,18 +25,53 @@ public sealed class ExternalSaveMutationService : ISaveMutationService
             return Failure(outputSavePath, $"Input save does not exist: {inputSavePath}");
         }
 
+        if (!Path.GetExtension(inputSavePath).Equals(".sav", StringComparison.OrdinalIgnoreCase))
+        {
+            return Failure(outputSavePath, "Input file must be a Satisfactory .sav file.");
+        }
+
+        if (!Path.GetExtension(outputSavePath).Equals(".sav", StringComparison.OrdinalIgnoreCase))
+        {
+            return Failure(outputSavePath, "Output file must use the .sav extension.");
+        }
+
         if (Path.GetFullPath(inputSavePath).Equals(Path.GetFullPath(outputSavePath), StringComparison.OrdinalIgnoreCase))
         {
             return Failure(outputSavePath, "Output path must not overwrite the original save.");
         }
 
-        var workerPath = ResolveWorkerPath();
+        var workerPath = SaveWorkerRuntime.ResolveWorkerScript("mutate-save.js");
         if (workerPath is null)
         {
             return Failure(outputSavePath, "Could not find SaveWorker/mutate-save.js beside the app or in the source tree.");
         }
 
-        Directory.CreateDirectory(Path.GetDirectoryName(outputSavePath)!);
+        var outputDirectory = Path.GetDirectoryName(outputSavePath);
+        if (string.IsNullOrWhiteSpace(outputDirectory))
+        {
+            return Failure(outputSavePath, "Output path must include a folder.");
+        }
+
+        try
+        {
+            Directory.CreateDirectory(outputDirectory);
+            VerifyOutputDirectoryWritable(outputDirectory);
+        }
+        catch (Exception ex)
+        {
+            return Failure(outputSavePath, $"Output folder is not writable. No changes were written. {ex.Message}");
+        }
+
+        string backupPath;
+        try
+        {
+            backupPath = CreateInputBackup(inputSavePath);
+        }
+        catch (Exception ex)
+        {
+            return Failure(outputSavePath, $"Could not create a backup copy of the input save. No changes were written. {ex.Message}");
+        }
+
         var assignmentPath = Path.Combine(Path.GetTempPath(), $"satisfactory-node-assignments-{Guid.NewGuid():N}.json");
         var assignments = nodes
             .Where(node =>
@@ -60,7 +95,7 @@ public sealed class ExternalSaveMutationService : ISaveMutationService
 
         var startInfo = new ProcessStartInfo
         {
-            FileName = "node",
+            FileName = SaveWorkerRuntime.ResolveNodeExecutable(),
             WorkingDirectory = Path.GetDirectoryName(workerPath)!,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
@@ -98,7 +133,7 @@ public sealed class ExternalSaveMutationService : ISaveMutationService
         }
         catch (Exception ex)
         {
-            return Failure(outputSavePath, $"Failed to start Node worker. Is Node.js installed? {ex.Message}");
+            return Failure(outputSavePath, SaveWorkerRuntime.FormatNodeStartFailure(ex), backupPath);
         }
 
         try
@@ -116,9 +151,10 @@ public sealed class ExternalSaveMutationService : ISaveMutationService
                 {
                     Success = process.ExitCode == 0 && result.Success,
                     OutputSavePath = string.IsNullOrWhiteSpace(result.OutputSavePath) ? outputSavePath : result.OutputSavePath,
+                    BackupSavePath = backupPath,
                     CandidateNodesFound = result.CandidateNodesFound,
                     NodesChanged = result.NodesChanged,
-                    Log = CombineLogs(result.Log, stderrText),
+                    Log = CombineLogs($"Backup created: {backupPath}", result.Log, stderrText),
                     ErrorMessage = process.ExitCode == 0 ? result.ErrorMessage : result.ErrorMessage ?? $"Worker exited with code {process.ExitCode}."
                 };
             }
@@ -127,7 +163,8 @@ public sealed class ExternalSaveMutationService : ISaveMutationService
             {
                 Success = false,
                 OutputSavePath = outputSavePath,
-                Log = CombineLogs(stdoutText, stderrText),
+                BackupSavePath = backupPath,
+                Log = CombineLogs($"Backup created: {backupPath}", stdoutText, stderrText),
                 ErrorMessage = $"Worker exited with code {process.ExitCode} and did not return parseable JSON."
             };
         }
@@ -155,30 +192,49 @@ public sealed class ExternalSaveMutationService : ISaveMutationService
         }
     }
 
-    private static SaveMutationResult Failure(string outputSavePath, string message) => new()
+    private static SaveMutationResult Failure(string outputSavePath, string message, string backupPath = "") => new()
     {
         Success = false,
         OutputSavePath = outputSavePath,
+        BackupSavePath = backupPath,
         ErrorMessage = message,
-        Log = message
+        Log = string.IsNullOrWhiteSpace(backupPath)
+            ? message
+            : CombineLogs($"Backup created: {backupPath}", message)
     };
 
-    private static string CombineLogs(string first, string second)
+    private static string CombineLogs(params string[] entries)
     {
-        var parts = new[] { first.Trim(), second.Trim() }.Where(part => !string.IsNullOrWhiteSpace(part));
+        var parts = entries.Select(entry => entry.Trim()).Where(part => !string.IsNullOrWhiteSpace(part));
         return string.Join(Environment.NewLine, parts);
     }
 
-    private static string? ResolveWorkerPath()
+    private static void VerifyOutputDirectoryWritable(string outputDirectory)
     {
-        var baseDirectory = AppContext.BaseDirectory;
-        var candidates = new[]
+        var probePath = Path.Combine(outputDirectory, $".sne-write-test-{Guid.NewGuid():N}.tmp");
+        try
         {
-            Path.GetFullPath(Path.Combine(baseDirectory, "..", "..", "..", "..", "SaveWorker", "mutate-save.js")),
-            Path.Combine(baseDirectory, "SaveWorker", "mutate-save.js")
-        };
+            File.WriteAllText(probePath, "write-test");
+        }
+        finally
+        {
+            TryDelete(probePath);
+        }
+    }
 
-        return candidates.FirstOrDefault(File.Exists);
+    private static string CreateInputBackup(string inputSavePath)
+    {
+        var backupDirectory = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "SatisfactoryNodeEditor",
+            "backups");
+        Directory.CreateDirectory(backupDirectory);
+
+        var name = Path.GetFileNameWithoutExtension(inputSavePath);
+        var timestamp = DateTime.Now.ToString("yyyy-MM-dd_HHmmss");
+        var backupPath = Path.Combine(backupDirectory, $"{name}_original_{timestamp}.sav");
+        File.Copy(inputSavePath, backupPath, overwrite: false);
+        return backupPath;
     }
 
     private static void TryDelete(string path)

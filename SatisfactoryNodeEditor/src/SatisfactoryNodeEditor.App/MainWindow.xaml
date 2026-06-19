@@ -5,7 +5,7 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:controls="clr-namespace:SatisfactoryNodeEditor.App.Controls"
         mc:Ignorable="d"
-        Title="Satisfactory Node Editor"
+        Title="{Binding WindowTitle, Mode=OneWay, FallbackValue=Satisfactory Node Editor v0.1.0}"
         Icon="Assets/Brand/app-icon.ico"
         WindowState="Maximized"
         MinHeight="760"
@@ -320,6 +320,7 @@
         <Border Grid.RowSpan="2"
                 Background="#D9000000"
                 Padding="28"
+                Panel.ZIndex="10"
                 Visibility="{Binding IsGuideImageOverlayVisible, Converter={StaticResource BooleanToVisibilityConverter}}">
             <Button Command="{Binding ToggleGuideImageCommand}"
                     CommandParameter="{Binding GuideImageOverlaySource}"
@@ -330,6 +331,52 @@
                        Stretch="Uniform"
                        SnapsToDevicePixels="True" />
             </Button>
+        </Border>
+
+        <Border Grid.RowSpan="2"
+                Background="#D9000000"
+                Padding="28"
+                Panel.ZIndex="20"
+                Visibility="{Binding IsSafetyNoticeVisible, Converter={StaticResource BooleanToVisibilityConverter}}">
+            <Border Style="{StaticResource PanelBorder}"
+                    Width="560"
+                    Padding="28"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center">
+                <StackPanel>
+                    <Image Source="Assets/Brand/app-logo.png"
+                           Width="58"
+                           Height="58"
+                           HorizontalAlignment="Left"
+                           Margin="0,0,0,16"
+                           SnapsToDevicePixels="False"
+                           RenderOptions.BitmapScalingMode="HighQuality"
+                           RenderOptions.EdgeMode="Unspecified" />
+                    <TextBlock Text="Before you edit a save"
+                               FontSize="24"
+                               FontWeight="SemiBold"
+                               Margin="0,0,0,10" />
+                    <TextBlock Text="Satisfactory Node Editor is an experimental, unofficial save editing tool for Satisfactory. It is not affiliated with Coffee Stain Studios."
+                               TextWrapping="Wrap"
+                               FontSize="14"
+                               Margin="0,0,0,12" />
+                    <Border Padding="14"
+                            CornerRadius="7"
+                            BorderThickness="1"
+                            BorderBrush="#8F8A5A00"
+                            Background="#33D49A2A"
+                            Margin="0,0,0,16">
+                        <TextBlock Text="Always back up your saves before editing. The app creates a backup before writing, but keeping your own backups is still the safest way to protect important worlds."
+                                   TextWrapping="Wrap"
+                                   Style="{StaticResource SecondaryText}" />
+                    </Border>
+                    <Button Content="Continue"
+                            Command="{Binding AcceptSafetyNoticeCommand}"
+                            Style="{StaticResource PrimaryButton}"
+                            MinWidth="150"
+                            HorizontalAlignment="Right" />
+                </StackPanel>
+            </Border>
         </Border>
 
         <Border Grid.Row="0"
@@ -433,13 +480,13 @@
                                 BorderBrush="{DynamicResource AppBorderBrush}"
                                 FontWeight="SemiBold"
                                 Margin="0,0,6,0" />
-                        <Button Content="Wells &amp; Geysers"
+                        <Button Content="About"
                                 Command="{Binding SetEditorTabCommand}"
-                                CommandParameter="WellsAndGeysers"
+                                CommandParameter="About"
                                 Style="{StaticResource EditorTabButton}"
-                                Tag="{Binding IsWellsAndGeysersTabSelected}"
-                                Background="{Binding WellsAndGeysersTabBrush}"
-                                Foreground="{Binding WellsAndGeysersTabTextBrush}"
+                                Tag="{Binding IsAboutTabSelected}"
+                                Background="{Binding AboutTabBrush}"
+                                Foreground="{Binding AboutTabTextBrush}"
                                 BorderBrush="{DynamicResource AppBorderBrush}"
                                 FontWeight="SemiBold" />
                     </UniformGrid>
@@ -653,93 +700,197 @@
                         </StackPanel>
                     </ScrollViewer>
 
-                    <StackPanel Grid.Row="1"
-                                Visibility="{Binding IsMapBrushTabSelected, Converter={StaticResource BooleanToVisibilityConverter}}">
-                        <Border Style="{StaticResource PanelBorder}" Padding="12" Margin="0,0,0,12">
+                    <Grid Grid.Row="1"
+                          Visibility="{Binding IsMapBrushTabSelected, Converter={StaticResource BooleanToVisibilityConverter}}">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+
+                        <StackPanel Grid.Row="0">
+                            <Border Style="{StaticResource PanelBorder}" Padding="12" Margin="0,0,0,12">
+                                <StackPanel>
+                                    <TextBlock Text="Brush Controls" FontWeight="SemiBold" FontSize="16" Margin="0,0,0,10" />
+                                    <TextBlock Text="Hold Ctrl to activate the brush. LMB paints ordinary resource nodes inside the brush circle; RMB marks them Empty for removal from the final save. Middle-click a node to pick its resource and purity into the brush."
+                                               Style="{StaticResource MutedText}"
+                                               TextWrapping="Wrap" />
+                                </StackPanel>
+                            </Border>
+
+                            <Border Style="{StaticResource PanelBorder}" Padding="12" Margin="0,0,0,12">
+                                <StackPanel>
+                                    <TextBlock Text="Resource" FontWeight="SemiBold" FontSize="16" Margin="0,0,0,8" />
+                                    <CheckBox Content="Change resources"
+                                              IsChecked="{Binding IsBrushResourceChangeEnabled}"
+                                              Style="{StaticResource BoxedToggleCheckBox}"
+                                              Margin="0,0,0,10" />
+                                    <ComboBox SelectedValue="{Binding BrushResourceType, Mode=TwoWay}"
+                                              SelectedValuePath="Content"
+                                              Visibility="{Binding IsBrushResourceChangeEnabled, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                        <ComboBoxItem Content="Iron" />
+                                        <ComboBoxItem Content="Limestone" />
+                                        <ComboBoxItem Content="Coal" />
+                                        <ComboBoxItem Content="Copper" />
+                                        <ComboBoxItem Content="Crude Oil" />
+                                        <ComboBoxItem Content="SAM" />
+                                        <ComboBoxItem Content="Caterium" />
+                                        <ComboBoxItem Content="Bauxite" />
+                                        <ComboBoxItem Content="Raw Quartz" />
+                                        <ComboBoxItem Content="Sulfur" />
+                                        <ComboBoxItem Content="Uranium" />
+                                        <ComboBoxItem Content="Empty" />
+                                    </ComboBox>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Style="{StaticResource PanelBorder}" Padding="12" Margin="0,0,0,12">
+                                <StackPanel>
+                                    <TextBlock Text="Purity" FontWeight="SemiBold" FontSize="16" Margin="0,0,0,8" />
+                                    <CheckBox Content="Change purity"
+                                              IsChecked="{Binding IsBrushPurityChangeEnabled}"
+                                              Style="{StaticResource BoxedToggleCheckBox}"
+                                              Margin="0,0,0,10" />
+                                    <ComboBox SelectedValue="{Binding BrushPurity, Mode=TwoWay}"
+                                              SelectedValuePath="Content"
+                                              Visibility="{Binding IsBrushPurityChangeEnabled, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                        <ComboBoxItem Content="Impure" />
+                                        <ComboBoxItem Content="Normal" />
+                                        <ComboBoxItem Content="Pure" />
+                                    </ComboBox>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Style="{StaticResource PanelBorder}" Padding="12">
+                                <StackPanel>
+                                    <Grid Margin="0,0,0,8">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Text="Brush size" FontWeight="SemiBold" FontSize="16" />
+                                        <TextBlock Grid.Column="1" Text="{Binding BrushSizeDisplay}" Style="{StaticResource SecondaryText}" />
+                                    </Grid>
+                                    <Slider Minimum="8" Maximum="128" Value="{Binding BrushSizePixels, Mode=TwoWay}" TickFrequency="8" IsSnapToTickEnabled="True" />
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+
+                        <Border Grid.Row="2"
+                                Style="{StaticResource PanelBorder}"
+                                Padding="14"
+                                VerticalAlignment="Bottom">
                             <StackPanel>
-                                <TextBlock Text="Brush Controls" FontWeight="SemiBold" FontSize="16" Margin="0,0,0,10" />
-                                <TextBlock Text="Hold Ctrl to activate the brush. LMB paints ordinary resource nodes inside the brush circle; RMB marks them Empty for removal from the final save. Middle-click a node to pick its resource and purity into the brush."
+                                <TextBlock Text="Important"
+                                           FontWeight="SemiBold"
+                                           FontSize="16"
+                                           Margin="0,0,0,8" />
+                                <TextBlock Text="The brush only changes ordinary resource nodes. It does not paint fracking wells, well satellites, or geysers. Resource shuffle function also doesn't affect these special nodes."
+                                           TextWrapping="Wrap"
+                                           Margin="0,0,0,8" />
+                                <TextBlock Text="Fracking wells can still be edited from their map card. Geysers are display-only because currently save files do not expose reliable mutable geyser purity data."
                                            Style="{StaticResource MutedText}"
                                            TextWrapping="Wrap" />
                             </StackPanel>
                         </Border>
+                    </Grid>
 
-                        <Border Style="{StaticResource PanelBorder}" Padding="12" Margin="0,0,0,12">
-                            <StackPanel>
-                                <TextBlock Text="Resource" FontWeight="SemiBold" FontSize="16" Margin="0,0,0,8" />
-                                <CheckBox Content="Change resources"
-                                          IsChecked="{Binding IsBrushResourceChangeEnabled}"
-                                          Style="{StaticResource BoxedToggleCheckBox}"
-                                          Margin="0,0,0,10" />
-                                <ComboBox SelectedValue="{Binding BrushResourceType, Mode=TwoWay}"
-                                          SelectedValuePath="Content"
-                                          Visibility="{Binding IsBrushResourceChangeEnabled, Converter={StaticResource BooleanToVisibilityConverter}}">
-                                    <ComboBoxItem Content="Iron" />
-                                    <ComboBoxItem Content="Limestone" />
-                                    <ComboBoxItem Content="Coal" />
-                                    <ComboBoxItem Content="Copper" />
-                                    <ComboBoxItem Content="Crude Oil" />
-                                    <ComboBoxItem Content="SAM" />
-                                    <ComboBoxItem Content="Caterium" />
-                                    <ComboBoxItem Content="Bauxite" />
-                                    <ComboBoxItem Content="Raw Quartz" />
-                                    <ComboBoxItem Content="Sulfur" />
-                                    <ComboBoxItem Content="Uranium" />
-                                    <ComboBoxItem Content="Empty" />
-                                </ComboBox>
-                            </StackPanel>
-                        </Border>
-
-                        <Border Style="{StaticResource PanelBorder}" Padding="12" Margin="0,0,0,12">
-                            <StackPanel>
-                                <TextBlock Text="Purity" FontWeight="SemiBold" FontSize="16" Margin="0,0,0,8" />
-                                <CheckBox Content="Change purity"
-                                          IsChecked="{Binding IsBrushPurityChangeEnabled}"
-                                          Style="{StaticResource BoxedToggleCheckBox}"
-                                          Margin="0,0,0,10" />
-                                <ComboBox SelectedValue="{Binding BrushPurity, Mode=TwoWay}"
-                                          SelectedValuePath="Content"
-                                          Visibility="{Binding IsBrushPurityChangeEnabled, Converter={StaticResource BooleanToVisibilityConverter}}">
-                                    <ComboBoxItem Content="Impure" />
-                                    <ComboBoxItem Content="Normal" />
-                                    <ComboBoxItem Content="Pure" />
-                                </ComboBox>
-                            </StackPanel>
-                        </Border>
-
-                        <Border Style="{StaticResource PanelBorder}" Padding="12">
-                            <StackPanel>
-                                <Grid Margin="0,0,0,8">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="Auto" />
-                                    </Grid.ColumnDefinitions>
-                                    <TextBlock Text="Brush size" FontWeight="SemiBold" FontSize="16" />
-                                    <TextBlock Grid.Column="1" Text="{Binding BrushSizeDisplay}" Style="{StaticResource SecondaryText}" />
-                                </Grid>
-                                <Slider Minimum="8" Maximum="128" Value="{Binding BrushSizePixels, Mode=TwoWay}" TickFrequency="8" IsSnapToTickEnabled="True" />
-                            </StackPanel>
-                        </Border>
-                    </StackPanel>
-
-                    <Border Grid.Row="1"
-                            Style="{StaticResource PanelBorder}"
-                            Padding="16"
-                            VerticalAlignment="Top"
-                            Visibility="{Binding IsWellsAndGeysersTabSelected, Converter={StaticResource BooleanToVisibilityConverter}}">
+                    <ScrollViewer Grid.Row="1"
+                                  VerticalScrollBarVisibility="Auto"
+                                  Visibility="{Binding IsAboutTabSelected, Converter={StaticResource BooleanToVisibilityConverter}}">
                         <StackPanel>
-                            <TextBlock Text="Wells &amp; Geysers"
-                                       FontWeight="SemiBold"
-                                       FontSize="18"
-                                       Margin="0,0,0,10" />
-                            <TextBlock Text="Only fracking well cores are shown on the map. Click a well icon to change the whole well resource, or adjust the purity of each satellite in that well."
-                                       TextWrapping="Wrap"
-                                       Margin="0,0,0,8" />
-                            <TextBlock Text="Geysers remain display-only because the tested saves do not serialize mutable geyser purity data. Shuffle, purity shuffle, and map brush actions still ignore wells and geysers."
-                                       Style="{StaticResource MutedText}"
-                                       TextWrapping="Wrap" />
+                            <Border Style="{StaticResource PanelBorder}" Padding="18" Margin="0,0,0,12">
+                                <StackPanel HorizontalAlignment="Stretch">
+                                    <Image Source="Assets/Brand/app-logo.png"
+                                           Width="64"
+                                           Height="64"
+                                           HorizontalAlignment="Left"
+                                           Margin="0,0,0,14"
+                                           SnapsToDevicePixels="False"
+                                           RenderOptions.BitmapScalingMode="HighQuality"
+                                           RenderOptions.EdgeMode="Unspecified" />
+                                    <TextBlock Text="Satisfactory Node Editor"
+                                               FontSize="22"
+                                               FontWeight="SemiBold"
+                                               Margin="0,0,0,4" />
+                                    <TextBlock Style="{StaticResource SecondaryText}" FontSize="14" Margin="0,0,0,14">
+                                        <Run Text="Version: " />
+                                        <Run Text="{Binding AppVersion, Mode=OneWay}" />
+                                    </TextBlock>
+                                    <TextBlock Text="Unofficial save editing tool for Satisfactory"
+                                               TextWrapping="Wrap"
+                                               FontSize="14"
+                                               Margin="0,0,0,8" />
+                                    <TextBlock Text="Not affiliated with Coffee Stain Studios"
+                                               Style="{StaticResource MutedText}"
+                                               TextWrapping="Wrap" />
+                                </StackPanel>
+                            </Border>
+
+                            <Border Style="{StaticResource PanelBorder}" Padding="14" Margin="0,0,0,12">
+                                <StackPanel>
+                                    <TextBlock Text="Links"
+                                               FontWeight="SemiBold"
+                                               FontSize="16"
+                                               Margin="0,0,0,10" />
+                                    <Grid Margin="0,0,0,8">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="82" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Text="Discord"
+                                                   Style="{StaticResource MutedText}"
+                                                   FontWeight="SemiBold"
+                                                   VerticalAlignment="Center" />
+                                        <Button Grid.Column="1"
+                                                Command="{Binding SupportCommand}"
+                                                Style="{StaticResource LinkButton}"
+                                                HorizontalAlignment="Left">
+                                            <TextBlock Text="https://discord.gg/w8hqmrmn5J"
+                                                       Foreground="{DynamicResource WindowsAccentBrush}"
+                                                       TextDecorations="Underline"
+                                                       TextWrapping="Wrap" />
+                                        </Button>
+                                    </Grid>
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="82" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Text="GitHub"
+                                                   Style="{StaticResource MutedText}"
+                                                   FontWeight="SemiBold"
+                                                   VerticalAlignment="Center" />
+                                        <Button Grid.Column="1"
+                                                Command="{Binding OpenGitHubCommand}"
+                                                Style="{StaticResource LinkButton}"
+                                                HorizontalAlignment="Left">
+                                            <TextBlock Text="DrunkenCorsar/SatisfactoryNodeEditor"
+                                                       Foreground="{DynamicResource WindowsAccentBrush}"
+                                                       TextDecorations="Underline"
+                                                       TextWrapping="Wrap" />
+                                        </Button>
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Padding="14"
+                                    CornerRadius="7"
+                                    BorderThickness="1"
+                                    BorderBrush="#8F8A5A00"
+                                    Background="#33D49A2A">
+                                <StackPanel>
+                                    <TextBlock Text="Backup warning"
+                                               FontWeight="SemiBold"
+                                               FontSize="16"
+                                               Margin="0,0,0,6" />
+                                    <TextBlock Text="Always back up your saves before editing. This app writes a separate output save by default, but backups are still the safest way to protect your worlds."
+                                               TextWrapping="Wrap"
+                                               Style="{StaticResource SecondaryText}" />
+                                </StackPanel>
+                            </Border>
                         </StackPanel>
-                    </Border>
+                    </ScrollViewer>
 
                     <Button Grid.Row="2"
                             Content="Shuffle"
