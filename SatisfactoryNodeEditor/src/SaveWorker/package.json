@@ -1,0 +1,13 @@
+{
+  "name": "satisfactory-node-editor-save-worker",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Temporary save mutation worker for the Satisfactory Node Editor PoC.",
+  "type": "commonjs",
+  "scripts": {
+    "mutate": "node mutate-save.js"
+  },
+  "dependencies": {
+    "@etothepii/satisfactory-file-parser": "^4.1.1"
+  }
+}

@@ -1,0 +1,151 @@
+<UserControl x:Class="SatisfactoryNodeEditor.App.Controls.MapViewport"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Focusable="True"
+             ClipToBounds="True"
+             MouseLeave="MapViewport_MouseLeave">
+    <Border x:Name="RootBorder"
+            Background="{DynamicResource AppPanelBrush}"
+            BorderBrush="{DynamicResource AppBorderBrush}"
+            BorderThickness="1">
+        <Grid>
+            <Canvas x:Name="MapCanvas"
+                    Width="5000"
+                    Height="5000"
+                    SnapsToDevicePixels="False"
+                    RenderOptions.BitmapScalingMode="HighQuality"
+                    RenderOptions.EdgeMode="Unspecified"
+                    RenderTransformOrigin="0,0"
+                    MouseWheel="MapCanvas_MouseWheel"
+                    MouseDown="MapCanvas_MouseButtonDown"
+                    MouseUp="MapCanvas_MouseButtonUp"
+                    MouseMove="MapCanvas_MouseMove">
+                <Canvas.RenderTransform>
+                    <TransformGroup>
+                        <ScaleTransform x:Name="MapScaleTransform" ScaleX="0.18" ScaleY="0.18" />
+                        <TranslateTransform x:Name="MapTranslateTransform" X="40" Y="30" />
+                    </TransformGroup>
+                </Canvas.RenderTransform>
+            </Canvas>
+
+            <Border x:Name="LegendBorder"
+                    HorizontalAlignment="Right"
+                    VerticalAlignment="Bottom"
+                    MaxWidth="320"
+                    Margin="12"
+                    Padding="0"
+                    Background="{DynamicResource AppInputBrush}"
+                    BorderBrush="{DynamicResource AppBorderBrush}"
+                    BorderThickness="1"
+                    CornerRadius="6">
+                <StackPanel>
+                    <Grid x:Name="LegendHeader"
+                          Margin="12,10,12,8"
+                          Background="Transparent"
+                          Cursor="Hand"
+                          MouseLeftButtonDown="LegendHeader_MouseLeftButtonDown">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="Legend"
+                                   FontWeight="SemiBold"
+                                   FontSize="15"
+                                   Foreground="{DynamicResource AppTextBrush}" />
+                        <Path x:Name="LegendToggleIcon"
+                              Grid.Column="1"
+                              Width="12"
+                              Height="12"
+                              VerticalAlignment="Center"
+                              Stroke="{DynamicResource AppTextBrush}"
+                              StrokeThickness="1.8"
+                              StrokeStartLineCap="Round"
+                              StrokeEndLineCap="Round"
+                              StrokeLineJoin="Round"
+                              Stretch="Uniform" />
+                    </Grid>
+                    <StackPanel x:Name="LegendPanel"
+                                Margin="12,0,12,12" />
+                </StackPanel>
+            </Border>
+
+            <Border x:Name="EqualizerBorder"
+                    HorizontalAlignment="Left"
+                    VerticalAlignment="Bottom"
+                    MaxWidth="320"
+                    Margin="12"
+                    Padding="0"
+                    Visibility="Collapsed"
+                    Background="{DynamicResource AppInputBrush}"
+                    BorderBrush="{DynamicResource AppBorderBrush}"
+                    BorderThickness="1"
+                    CornerRadius="6">
+                <StackPanel>
+                    <Grid x:Name="EqualizerHeader"
+                          Margin="12,10,12,10"
+                          Background="Transparent"
+                          Cursor="Hand"
+                          MouseLeftButtonDown="EqualizerHeader_MouseLeftButtonDown">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="Equalizer"
+                                   FontWeight="SemiBold"
+                                   FontSize="15"
+                                   Foreground="{DynamicResource AppTextBrush}" />
+                        <Path x:Name="EqualizerToggleIcon"
+                              Grid.Column="1"
+                              Width="12"
+                              Height="12"
+                              Margin="14,0,0,0"
+                              VerticalAlignment="Center"
+                              Stroke="{DynamicResource AppTextBrush}"
+                              StrokeThickness="1.8"
+                              StrokeStartLineCap="Round"
+                              StrokeEndLineCap="Round"
+                              StrokeLineJoin="Round"
+                              Stretch="Uniform" />
+                    </Grid>
+                    <StackPanel x:Name="EqualizerPanel"
+                                Margin="12,0,12,12" />
+                </StackPanel>
+            </Border>
+
+            <Button x:Name="FitToMapButton"
+                    HorizontalAlignment="Right"
+                    VerticalAlignment="Top"
+                    Width="36"
+                    Height="36"
+                    Margin="12"
+                    Padding="0"
+                    Click="FitToMapButton_Click">
+                <Viewbox Width="18" Height="18">
+                    <Canvas Width="18" Height="18">
+                        <Path Stroke="{DynamicResource AppTextBrush}"
+                              StrokeThickness="1.8"
+                              StrokeStartLineCap="Round"
+                              StrokeEndLineCap="Round"
+                              Data="M 3,7 L 3,3 L 7,3 M 11,3 L 15,3 L 15,7 M 15,11 L 15,15 L 11,15 M 7,15 L 3,15 L 3,11" />
+                        <Path Stroke="{DynamicResource AppTextBrush}"
+                              StrokeThickness="1.5"
+                              StrokeStartLineCap="Round"
+                              StrokeEndLineCap="Round"
+                              Data="M 6,6 L 8,8 M 12,6 L 10,8 M 12,12 L 10,10 M 6,12 L 8,10" />
+                    </Canvas>
+                </Viewbox>
+            </Button>
+
+            <Ellipse x:Name="BrushCircle"
+                     Width="32"
+                     Height="32"
+                     HorizontalAlignment="Left"
+                     VerticalAlignment="Top"
+                     Fill="#228FD8FF"
+                     Stroke="#FF8FD8FF"
+                     StrokeThickness="1.5"
+                     Visibility="Collapsed"
+                     IsHitTestVisible="False" />
+        </Grid>
+    </Border>
+</UserControl>
