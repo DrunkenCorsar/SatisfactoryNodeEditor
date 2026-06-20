@@ -5,7 +5,7 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:controls="clr-namespace:SatisfactoryNodeEditor.App.Controls"
         mc:Ignorable="d"
-        Title="{Binding WindowTitle, Mode=OneWay, FallbackValue=Satisfactory Node Editor v0.1.0}"
+        Title="{Binding WindowTitle, Mode=OneWay, FallbackValue=Satisfactory Node Editor v0.1.1}"
         Icon="Assets/Brand/app-icon.ico"
         WindowState="Maximized"
         MinHeight="760"
