@@ -81,6 +81,7 @@ public partial class MapViewport : UserControl
     private bool _isDragging;
     private bool _isBrushPainting;
     private bool _isBrushErasing;
+    private bool _isFitMapToViewportQueued;
     private Point _lastDragPoint;
     private Point _lastMousePoint;
     private Point _pendingNodeClickPoint;
@@ -99,7 +100,7 @@ public partial class MapViewport : UserControl
             UpdateLegendCollapseState();
             UpdateEqualizerCollapseState();
             RenderMap();
-            Dispatcher.BeginInvoke(new Action(FitMapToViewport), System.Windows.Threading.DispatcherPriority.ContextIdle);
+            QueueFitMapToViewport();
         };
         Unloaded += (_, _) => InputManager.Current.PreProcessInput -= InputManager_PreProcessInput;
         SizeChanged += (_, _) =>
@@ -159,6 +160,7 @@ public partial class MapViewport : UserControl
         {
             viewport.UpdateCollectionSubscription(args.NewValue);
             viewport.RenderMap();
+            viewport.QueueFitMapToViewport();
         }
     }
 
@@ -1696,6 +1698,21 @@ public partial class MapViewport : UserControl
         CloseNodeCard();
         FitMapToViewport();
         e.Handled = true;
+    }
+
+    private void QueueFitMapToViewport()
+    {
+        if (_isFitMapToViewportQueued)
+        {
+            return;
+        }
+
+        _isFitMapToViewportQueued = true;
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            _isFitMapToViewportQueued = false;
+            FitMapToViewport();
+        }), System.Windows.Threading.DispatcherPriority.ContextIdle);
     }
 
     private void FitMapToViewport()
