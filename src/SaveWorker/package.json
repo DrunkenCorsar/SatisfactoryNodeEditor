@@ -1,6 +1,6 @@
 {
   "name": "satisfactory-node-editor-save-worker",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Temporary save mutation worker for the Satisfactory Node Editor PoC.",
   "type": "commonjs",

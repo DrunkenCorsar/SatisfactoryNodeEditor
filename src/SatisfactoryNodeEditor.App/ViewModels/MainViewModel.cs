@@ -836,7 +836,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     {
         var version = Assembly.GetExecutingAssembly().GetName().Version;
         return version is null
-            ? "0.1.0"
+            ? "0.1.1"
             : $"{version.Major}.{version.Minor}.{version.Build}";
     }
 
@@ -1197,7 +1197,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "SatisfactoryNodeEditor",
         "settings",
-        "safety-notice-0.1.0.accepted");
+        "safety-notice-0.1.1.accepted");
 
     private bool SetField<T>(ref T field, T value, [CallerMemberName] string? propertyName = null)
     {
