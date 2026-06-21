@@ -6,6 +6,8 @@ This README documents both the current product behavior and the architecture dev
 
 Always back up Satisfactory saves before loading generated files in the game.
 
+See [CHANGELOG.md](CHANGELOG.md) for release notes.
+
 ## Current Status
 
 The application is a WPF desktop app backed by a Node.js save worker. The WPF app owns the user experience, map interaction, preview state, and save workflow. The Node worker owns Satisfactory save parsing and serialization through `@etothepii/satisfactory-file-parser`.
@@ -25,7 +27,8 @@ Generated saves use the `_NODE_EDITOR.sav` suffix by default. The original input
 - Shuffle ordinary resource nodes into same-resource regions with an adjustable clustering slider.
 - Enable hard mode at maximum clustering to separate common resources more aggressively.
 - Change requested resource counts before shuffling.
-- Shuffle purities separately using native, global, or per-resource distributions.
+- Shuffle purities separately using current, native, global, or per-resource distributions.
+- Compare the visible map resource balance with the Equalizer overlay.
 - Paint resource nodes directly on the map with a brush.
 - Mark nodes as empty so they are removed from the final resource distribution.
 - Edit fracking well resource type and satellite purities from the map card.
@@ -113,9 +116,10 @@ The app distinguishes between several node kinds:
 
 The shuffle algorithm works in preview memory. It groups ordinary nodes by requested resource counts, chooses balanced spatial clusters, assigns resource and purity pools into those clusters, and reports diagnostic metrics. The clustering slider moves from broad spread to compact same-resource regions. Hard mode gives selected common resources more separated seeds when the slider is maxed.
 
-Purity handling supports three modes:
+Purity handling supports four modes:
 
-- Native: reuse the purity distribution already present in the loaded save.
+- Current: reuse the purity distribution currently visible on the map.
+- Native: reuse the purity distribution captured when the save was loaded.
 - Global: apply one impure/normal/pure percentage distribution across all ordinary non-empty nodes.
 - Per resource: apply separate purity distributions for each resource type.
 
@@ -206,6 +210,7 @@ If parser errors mention an offset outside the `DataView` bounds, load the save 
 
 - `docs/save-format-notes.md` records save parser observations and risks.
 - `docs/future-map-editor-design.md` describes the intended long-term editing direction.
+- `CHANGELOG.md` lists release notes by version.
 - `src/SaveWorker/README.md` documents direct worker usage.
 
 ## Safety Principles
