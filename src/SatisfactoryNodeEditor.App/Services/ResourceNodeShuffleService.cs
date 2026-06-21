@@ -98,7 +98,8 @@ public sealed class ResourceNodeShuffleService
         {
             PurityDistributionMode.PerResource => ApplyPerResourcePurityShuffle(ordinaryNodes, puritySettings),
             PurityDistributionMode.Global => ApplyGlobalPurityShuffle(ordinaryNodes, puritySettings.GlobalDistribution),
-            _ => ApplyNativePurityShuffle(ordinaryNodes)
+            PurityDistributionMode.Native => ApplyNativePurityShuffle(ordinaryNodes, puritySettings.NativePerResourcePurities),
+            _ => ApplyCurrentPurityShuffle(ordinaryNodes)
         };
 
         return new ShufflePreviewResult(
@@ -111,14 +112,37 @@ public sealed class ResourceNodeShuffleService
             """);
     }
 
-    private int ApplyNativePurityShuffle(ResourceNodeViewModel[] nodes)
+    private int ApplyCurrentPurityShuffle(ResourceNodeViewModel[] nodes)
     {
-        var pool = nodes
-            .Select(node => NormalizePurityLabel(node.Purity))
-            .OrderBy(_ => _random.Next())
-            .ToArray();
+        var changes = 0;
+        foreach (var group in nodes.GroupBy(node => node.ResourceType, StringComparer.OrdinalIgnoreCase))
+        {
+            var groupNodes = group.OrderBy(_ => _random.Next()).ToArray();
+            var pool = group
+                .Select(node => NormalizePurityLabel(node.Purity))
+                .OrderBy(_ => _random.Next())
+                .ToArray();
+            changes += ApplyPurityPool(groupNodes, pool);
+        }
 
-        return ApplyPurityPool(nodes.OrderBy(_ => _random.Next()).ToArray(), pool);
+        return changes;
+    }
+
+    private int ApplyNativePurityShuffle(
+        ResourceNodeViewModel[] nodes,
+        IReadOnlyDictionary<string, IReadOnlyList<string>> nativePuritiesByResource)
+    {
+        var changes = 0;
+        foreach (var group in nodes.GroupBy(node => node.ResourceType, StringComparer.OrdinalIgnoreCase))
+        {
+            var groupNodes = group.OrderBy(_ => _random.Next()).ToArray();
+            var pool = nativePuritiesByResource.TryGetValue(group.Key, out var nativePurities) && nativePurities.Count > 0
+                ? RepeatNativePurityPool(nativePurities, groupNodes.Length).OrderBy(_ => _random.Next()).ToArray()
+                : group.Select(node => NormalizePurityLabel(node.Purity)).OrderBy(_ => _random.Next()).ToArray();
+            changes += ApplyPurityPool(groupNodes, pool);
+        }
+
+        return changes;
     }
 
     private int ApplyGlobalPurityShuffle(ResourceNodeViewModel[] nodes, PurityDistribution distribution)
@@ -180,11 +204,8 @@ public sealed class ResourceNodeShuffleService
                     group.OrderBy(assignment => PurityRank(assignment.Purity)).ToArray()));
         }
 
-        var availablePurities = ordinaryNodes
-            .Select(node => node.Purity)
-            .OrderBy(PurityRank)
-            .ToArray();
-        var purityIndex = 0;
+        var currentPuritiesByResource = BuildNativePurityPools(ordinaryNodes);
+        var nativePuritiesByResource = puritySettings?.NativePerResourcePurities ?? currentPuritiesByResource;
         var groups = new List<ResourceGroup>();
         var requestedTotal = Math.Min(ordinaryNodes.Count, requestedCounts.Values.Where(count => count > 0).Sum());
         var remainingNodes = ordinaryNodes.Count;
@@ -205,7 +226,13 @@ public sealed class ResourceNodeShuffleService
 
         foreach (var pair in requestedResourceCounts)
         {
-            var purityPool = BuildPurityPoolForResource(pair.Key, pair.Value, puritySettings, globalPurityAllocations, availablePurities, ref purityIndex);
+            var purityPool = BuildPurityPoolForResource(
+                pair.Key,
+                pair.Value,
+                puritySettings,
+                globalPurityAllocations,
+                currentPuritiesByResource,
+                nativePuritiesByResource);
             var assignments = purityPool
                 .Select(purity => new NodeAssignment(pair.Key, purity))
                 .OrderBy(assignment => PurityRank(assignment.Purity))
@@ -252,8 +279,8 @@ public sealed class ResourceNodeShuffleService
         int count,
         PurityShuffleSettings? puritySettings,
         IReadOnlyDictionary<string, PurityCounts>? globalPurityAllocations,
-        string[] nativePurities,
-        ref int nativePurityIndex)
+        IReadOnlyDictionary<string, IReadOnlyList<string>> currentPuritiesByResource,
+        IReadOnlyDictionary<string, IReadOnlyList<string>> nativePuritiesByResource)
     {
         if (resourceType.Equals("Empty", StringComparison.OrdinalIgnoreCase))
         {
@@ -276,10 +303,32 @@ public sealed class ResourceNodeShuffleService
             return CreatePurityPool(counts);
         }
 
+        var sourcePurities = puritySettings?.Mode == PurityDistributionMode.Native
+            ? nativePuritiesByResource
+            : currentPuritiesByResource;
+        return sourcePurities.TryGetValue(resourceType, out var nativePurities) && nativePurities.Count > 0
+            ? RepeatNativePurityPool(nativePurities, count)
+            : Enumerable.Repeat("Normal", count).ToArray();
+    }
+
+    private static Dictionary<string, IReadOnlyList<string>> BuildNativePurityPools(IEnumerable<ResourceNodeViewModel> nodes) =>
+        nodes
+            .Where(node => !node.ResourceType.Equals("Empty", StringComparison.OrdinalIgnoreCase))
+            .GroupBy(node => node.ResourceType, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(
+                group => group.Key,
+                group => (IReadOnlyList<string>)group
+                    .Select(node => NormalizePurityLabel(node.Purity))
+                    .OrderBy(PurityRank)
+                    .ToArray(),
+                StringComparer.OrdinalIgnoreCase);
+
+    private static string[] RepeatNativePurityPool(IReadOnlyList<string> nativePurities, int count)
+    {
         var result = new string[count];
         for (var index = 0; index < result.Length; index++)
         {
-            result[index] = nativePurities[nativePurityIndex++ % nativePurities.Length];
+            result[index] = nativePurities[index % nativePurities.Count];
         }
 
         return result;

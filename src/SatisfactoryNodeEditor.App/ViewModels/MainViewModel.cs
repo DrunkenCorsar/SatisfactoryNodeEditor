@@ -41,7 +41,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private string _brushResourceType = "Iron";
     private string _brushPurity = "Normal";
     private double _brushSizePixels = 32;
-    private PurityDistributionMode _selectedPurityDistributionMode = PurityDistributionMode.Native;
+    private PurityDistributionMode _selectedPurityDistributionMode = PurityDistributionMode.Current;
+    private Dictionary<string, IReadOnlyList<string>> _nativePerResourcePurities = new(StringComparer.OrdinalIgnoreCase);
 
     public MainViewModel(
         ISaveMutationService saveMutationService,
@@ -230,18 +231,23 @@ public sealed class MainViewModel : INotifyPropertyChanged
             if (SetField(ref _selectedPurityDistributionMode, value))
             {
                 OnPropertyChanged(nameof(IsNativePurityMode));
+                OnPropertyChanged(nameof(IsCurrentPurityMode));
                 OnPropertyChanged(nameof(IsGlobalPurityMode));
                 OnPropertyChanged(nameof(IsPerResourcePurityMode));
                 OnPropertyChanged(nameof(IsPerResourcePurityPanelVisible));
                 OnPropertyChanged(nameof(NativeModeButtonBrush));
+                OnPropertyChanged(nameof(CurrentModeButtonBrush));
                 OnPropertyChanged(nameof(GlobalModeButtonBrush));
                 OnPropertyChanged(nameof(PerResourceModeButtonBrush));
                 OnPropertyChanged(nameof(NativeModeTextBrush));
+                OnPropertyChanged(nameof(CurrentModeTextBrush));
                 OnPropertyChanged(nameof(GlobalModeTextBrush));
                 OnPropertyChanged(nameof(PerResourceModeTextBrush));
             }
         }
     }
+
+    public bool IsCurrentPurityMode => SelectedPurityDistributionMode == PurityDistributionMode.Current;
 
     public bool IsNativePurityMode => SelectedPurityDistributionMode == PurityDistributionMode.Native;
 
@@ -249,11 +255,15 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     public bool IsPerResourcePurityMode => SelectedPurityDistributionMode == PurityDistributionMode.PerResource;
 
+    public Brush CurrentModeButtonBrush => GetModeButtonBrush(IsCurrentPurityMode);
+
     public Brush NativeModeButtonBrush => GetModeButtonBrush(IsNativePurityMode);
 
     public Brush GlobalModeButtonBrush => GetModeButtonBrush(IsGlobalPurityMode);
 
     public Brush PerResourceModeButtonBrush => GetModeButtonBrush(IsPerResourcePurityMode);
+
+    public Brush CurrentModeTextBrush => GetModeTextBrush(IsCurrentPurityMode);
 
     public Brush NativeModeTextBrush => GetModeTextBrush(IsNativePurityMode);
 
@@ -483,6 +493,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             {
                 ResourceNodes = new ObservableCollection<ResourceNodeViewModel>(inspection.Nodes);
                 _initialResourceCounts = BuildCountsFromSave(inspection.Nodes);
+                _nativePerResourcePurities = BuildNativePurityPools(inspection.Nodes);
                 ResetResourceCounts(_initialResourceCounts);
                 SyncPurityDistributionsFromNodes();
                 _hasUnsavedShuffle = false;
@@ -502,6 +513,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 else
                 {
                     ResourceNodes = [];
+                    _nativePerResourcePurities = new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase);
                     _hasUnsavedShuffle = false;
                     HasLoadedSave = false;
                 }
@@ -937,7 +949,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
         PerResourcePurityDistributions.ToDictionary(
             distribution => distribution.ResourceName,
             ToDistribution,
-            StringComparer.OrdinalIgnoreCase));
+            StringComparer.OrdinalIgnoreCase),
+        _nativePerResourcePurities);
 
     private static PurityDistribution ToDistribution(PurityDistributionViewModel distribution) => new(
         distribution.ImpurePercent,
@@ -965,6 +978,18 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private static bool IsOrdinaryNonEmptyResourceNode(ResourceNodeViewModel node) =>
         node.NodeKind.Equals("ResourceNode", StringComparison.OrdinalIgnoreCase) &&
         !node.ResourceType.Equals("Empty", StringComparison.OrdinalIgnoreCase);
+
+    private static Dictionary<string, IReadOnlyList<string>> BuildNativePurityPools(IEnumerable<ResourceNodeViewModel> nodes) =>
+        nodes
+            .Where(IsOrdinaryNonEmptyResourceNode)
+            .GroupBy(node => NormalizeResourceName(node.ResourceType), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(
+                group => group.Key,
+                group => (IReadOnlyList<string>)group
+                    .Select(node => PurityKey(node.Purity))
+                    .OrderBy(PurityRank)
+                    .ToArray(),
+                StringComparer.OrdinalIgnoreCase);
 
     private static void ApplyDistributionFromNodes(PurityDistributionViewModel distribution, IReadOnlyCollection<ResourceNodeViewModel> nodes)
     {
@@ -1083,6 +1108,14 @@ public sealed class MainViewModel : INotifyPropertyChanged
         "normal" or "rp_normal" => "Normal",
         "pure" or "rp_pure" => "Pure",
         _ => "Unknown"
+    };
+
+    private static int PurityRank(string purity) => PurityKey(purity) switch
+    {
+        "Impure" => 0,
+        "Normal" => 1,
+        "Pure" => 2,
+        _ => 3
     };
 
     private static bool CountsMatch(IReadOnlyDictionary<string, int> first, IReadOnlyDictionary<string, int> second) =>

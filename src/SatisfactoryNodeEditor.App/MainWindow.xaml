@@ -639,7 +639,14 @@
                                 <StackPanel>
                                     <TextBlock Text="Purity Distribution" FontWeight="SemiBold" FontSize="16" Margin="0,0,0,10" />
                                     <TextBlock Text="Mode" Style="{StaticResource SecondaryText}" Margin="0,0,0,6" />
-                                    <UniformGrid Columns="3" Margin="0,0,0,10">
+                                    <UniformGrid Columns="4" Margin="0,0,0,10">
+                                        <Button Content="Current"
+                                                Command="{Binding SetPurityDistributionModeCommand}"
+                                                CommandParameter="Current"
+                                                Background="{Binding CurrentModeButtonBrush}"
+                                                Foreground="{Binding CurrentModeTextBrush}"
+                                                Padding="8,7"
+                                                Margin="0,0,6,0" />
                                         <Button Content="Native"
                                                 Command="{Binding SetPurityDistributionModeCommand}"
                                                 CommandParameter="Native"
@@ -667,7 +674,12 @@
                                             Margin="0,0,0,12"
                                             HorizontalAlignment="Stretch" />
 
-                                    <TextBlock Text="Uses the native purity distribution from the save file."
+                                    <TextBlock Text="Uses the current purity distribution visible on the map."
+                                               Style="{StaticResource MutedText}"
+                                               TextWrapping="Wrap"
+                                               Visibility="{Binding IsCurrentPurityMode, Converter={StaticResource BooleanToVisibilityConverter}}" />
+
+                                    <TextBlock Text="Uses the native purity distribution captured when the save was loaded."
                                                Style="{StaticResource MutedText}"
                                                TextWrapping="Wrap"
                                                Visibility="{Binding IsNativePurityMode, Converter={StaticResource BooleanToVisibilityConverter}}" />
