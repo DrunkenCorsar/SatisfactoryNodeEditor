@@ -63,6 +63,8 @@ public partial class MapViewport : UserControl
     private const double GeyserNodeSize = 18;
     private const double MinZoom = 0.08;
     private const double MaxZoom = 8;
+    private const double EqualizerOverlayWidth = 320;
+    private const double EqualizerBarWidth = 104;
     private readonly ResourceNodeStyleProvider _styleProvider = new();
     private readonly List<FrameworkElement> _markerVisuals = [];
     private readonly Dictionary<string, ShapePath> _resourceMarkerVisuals = new(StringComparer.OrdinalIgnoreCase);
@@ -72,7 +74,10 @@ public partial class MapViewport : UserControl
     private FrameworkElement? _selectedNodeCard;
     private INotifyCollectionChanged? _notifiedNodes;
     private bool _isLegendCollapsed;
-    private bool _isEqualizerCollapsed = true;
+    private bool _isEqualizerCollapsed;
+    private bool _isEqualizerExpanded;
+    private bool _isEqualizerShowingZeroValues;
+    private string _selectedEqualizerMode = "Native";
     private bool _isDragging;
     private bool _isBrushPainting;
     private bool _isBrushErasing;
@@ -90,6 +95,7 @@ public partial class MapViewport : UserControl
         {
             InputManager.Current.PreProcessInput += InputManager_PreProcessInput;
             RenderLegend();
+            RenderEqualizer();
             UpdateLegendCollapseState();
             UpdateEqualizerCollapseState();
             RenderMap();
@@ -312,7 +318,6 @@ public partial class MapViewport : UserControl
 
     private void EqualizerHeader_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
-        PrepareOverlayWidthForToggle(EqualizerBorder, _isEqualizerCollapsed);
         _isEqualizerCollapsed = !_isEqualizerCollapsed;
         UpdateEqualizerCollapseState();
         e.Handled = true;
@@ -325,8 +330,334 @@ public partial class MapViewport : UserControl
 
     private void UpdateEqualizerCollapseState()
     {
+        if (EqualizerBorder is not null)
+        {
+            EqualizerBorder.Width = EqualizerOverlayWidth;
+        }
+
         UpdateOverlayCollapseState(EqualizerPanel, EqualizerToggleIcon, _isEqualizerCollapsed);
     }
+
+    private void RenderEqualizer()
+    {
+        if (EqualizerPanel is null)
+        {
+            return;
+        }
+
+        EqualizerPanel.Children.Clear();
+        EqualizerPanel.Children.Add(CreateEqualizerModeSwitch());
+        EqualizerPanel.Children.Add(new TextBlock
+        {
+            Text = _selectedEqualizerMode.Equals("Native", StringComparison.OrdinalIgnoreCase)
+                ? "Most deviated from original distribution"
+                : "Most deviated from default world distribution",
+            FontSize = 11,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 0, 0, 12)
+        });
+        ((TextBlock)EqualizerPanel.Children[^1]).SetResourceReference(TextBlock.ForegroundProperty, "AppMutedTextBrush");
+
+        var rows = GetEqualizerPreviewRows()
+            .Where(row => _isEqualizerShowingZeroValues || Math.Abs(row.DeviationPercent) > 0.001)
+            .OrderByDescending(row => Math.Abs(row.DeviationPercent))
+            .ToArray();
+        foreach (var row in rows.Take(_isEqualizerExpanded ? rows.Length : 5))
+        {
+            EqualizerPanel.Children.Add(CreateEqualizerResourceRow(row));
+        }
+
+        EqualizerPanel.Children.Add(CreateEqualizerShowMoreButton(rows.Length > 5));
+        UpdateEqualizerCollapseState();
+    }
+
+    private FrameworkElement CreateEqualizerModeSwitch()
+    {
+        var root = new Grid
+        {
+            Margin = new Thickness(0, 0, 0, 12)
+        };
+        root.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        root.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        root.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+        var switchRoot = new Border
+        {
+            HorizontalAlignment = HorizontalAlignment.Left,
+            Background = GetBrushResource("AppPanelBrush", SystemColors.ControlBrush),
+            BorderBrush = GetBrushResource("AppBorderBrush", SystemColors.ActiveBorderBrush),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(5),
+            Padding = new Thickness(2)
+        };
+
+        var grid = new UniformGrid { Columns = 2 };
+        grid.Children.Add(CreateEqualizerModeButton("Native"));
+        grid.Children.Add(CreateEqualizerModeButton("Default"));
+        switchRoot.Child = grid;
+        Grid.SetColumn(switchRoot, 0);
+        root.Children.Add(switchRoot);
+
+        var visibilityButton = CreateEqualizerZeroVisibilityButton();
+        Grid.SetColumn(visibilityButton, 2);
+        root.Children.Add(visibilityButton);
+        return root;
+    }
+
+    private FrameworkElement CreateEqualizerModeButton(string mode)
+    {
+        var isSelected = _selectedEqualizerMode.Equals(mode, StringComparison.OrdinalIgnoreCase);
+        var button = new Button
+        {
+            Content = mode,
+            Padding = new Thickness(9, 5, 9, 5),
+            BorderThickness = new Thickness(0),
+            FontSize = 11,
+            Cursor = Cursors.Hand,
+            Background = isSelected ? ToBrush("#273241") : Brushes.Transparent,
+            Foreground = isSelected ? Brushes.White : GetBrushResource("AppMutedTextBrush", SystemColors.GrayTextBrush)
+        };
+        button.Click += (_, args) =>
+        {
+            _selectedEqualizerMode = mode;
+            RenderEqualizer();
+            args.Handled = true;
+        };
+        return button;
+    }
+
+    private FrameworkElement CreateEqualizerZeroVisibilityButton()
+    {
+        var icon = new Grid
+        {
+            Width = 17,
+            Height = 12
+        };
+        var iconBrush = _isEqualizerShowingZeroValues
+            ? GetBrushResource("AppTextBrush", SystemColors.WindowTextBrush)
+            : GetBrushResource("AppMutedTextBrush", SystemColors.GrayTextBrush);
+        icon.Children.Add(new ShapePath
+        {
+            Data = Geometry.Parse("M 1 6 C 3.5 2 6 1 8.5 1 C 11 1 13.5 2 16 6 C 13.5 10 11 11 8.5 11 C 6 11 3.5 10 1 6 Z"),
+            Stroke = iconBrush,
+            StrokeThickness = 1.4,
+            Fill = Brushes.Transparent,
+            Stretch = Stretch.Fill,
+            StrokeStartLineCap = PenLineCap.Round,
+            StrokeEndLineCap = PenLineCap.Round,
+            StrokeLineJoin = PenLineJoin.Round
+        });
+        icon.Children.Add(new ShapeEllipse
+        {
+            Width = 4.8,
+            Height = 4.8,
+            Stroke = iconBrush,
+            StrokeThickness = 1.3,
+            Fill = Brushes.Transparent,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center
+        });
+        if (!_isEqualizerShowingZeroValues)
+        {
+            icon.Children.Add(new ShapePath
+            {
+                Data = Geometry.Parse("M 2 11 L 15 1"),
+                Stroke = iconBrush,
+                StrokeThickness = 1.5,
+                Stretch = Stretch.Fill,
+                StrokeStartLineCap = PenLineCap.Round,
+                StrokeEndLineCap = PenLineCap.Round
+            });
+        }
+
+        var button = new Button
+        {
+            Content = icon,
+            Width = 30,
+            Height = 28,
+            Padding = new Thickness(0),
+            BorderThickness = new Thickness(1),
+            Cursor = Cursors.Hand,
+            ToolTip = _isEqualizerShowingZeroValues ? "Hide unchanged resources" : "Show unchanged resources"
+        };
+        button.SetResourceReference(Button.BackgroundProperty, _isEqualizerShowingZeroValues ? "AppPanelBrush" : "AppInputBrush");
+        button.SetResourceReference(Button.BorderBrushProperty, "AppBorderBrush");
+        button.Click += (_, args) =>
+        {
+            _isEqualizerShowingZeroValues = !_isEqualizerShowingZeroValues;
+            RenderEqualizer();
+            args.Handled = true;
+        };
+        return button;
+    }
+
+    private FrameworkElement CreateEqualizerResourceRow(EqualizerPreviewRow row)
+    {
+        var grid = new Grid
+        {
+            Margin = new Thickness(0, 0, 0, 10)
+        };
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(112) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(54) });
+
+        var resource = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        resource.Children.Add(new ShapeEllipse
+        {
+            Width = 11,
+            Height = 11,
+            Fill = _styleProvider.GetResourceBrush(row.ResourceName),
+            Stroke = GetBrushResource("AppBorderBrush", SystemColors.ActiveBorderBrush),
+            StrokeThickness = 0.7,
+            Margin = new Thickness(0, 0, 8, 0)
+        });
+        var name = new TextBlock
+        {
+            Text = row.ResourceName,
+            FontSize = 12,
+            VerticalAlignment = VerticalAlignment.Center,
+            TextTrimming = TextTrimming.CharacterEllipsis
+        };
+        name.SetResourceReference(TextBlock.ForegroundProperty, "AppTextBrush");
+        resource.Children.Add(name);
+        Grid.SetColumn(resource, 0);
+        grid.Children.Add(resource);
+
+        var track = new Border
+        {
+            Width = EqualizerBarWidth,
+            Height = 7,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            VerticalAlignment = VerticalAlignment.Center,
+            Background = ToBrush("#25303a"),
+            CornerRadius = new CornerRadius(4)
+        };
+        var fill = new Border
+        {
+            Width = Math.Max(4, Math.Min(1, Math.Abs(row.DeviationPercent) / 100.0) * EqualizerBarWidth),
+            Height = 7,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            Background = GetDeviationBrush(row.DeviationPercent),
+            CornerRadius = new CornerRadius(4)
+        };
+        var barGrid = new Grid
+        {
+            Width = EqualizerBarWidth,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        barGrid.Children.Add(track);
+        barGrid.Children.Add(fill);
+        Grid.SetColumn(barGrid, 1);
+        grid.Children.Add(barGrid);
+
+        var value = new TextBlock
+        {
+            Text = FormatDeviation(row.DeviationPercent),
+            FontSize = 11,
+            FontWeight = FontWeights.SemiBold,
+            TextAlignment = TextAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        value.SetResourceReference(TextBlock.ForegroundProperty, "AppTextBrush");
+        Grid.SetColumn(value, 2);
+        grid.Children.Add(value);
+
+        return grid;
+    }
+
+    private FrameworkElement CreateEqualizerShowMoreButton(bool hasMoreRows)
+    {
+        var button = new Button
+        {
+            Content = CreateEqualizerShowMoreContent(),
+            IsEnabled = hasMoreRows,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            Padding = new Thickness(10, 7, 10, 7),
+            Margin = new Thickness(0, 2, 0, 0),
+            BorderThickness = new Thickness(1),
+            Cursor = hasMoreRows ? Cursors.Hand : Cursors.Arrow
+        };
+        button.SetResourceReference(Button.BackgroundProperty, "AppPanelBrush");
+        button.SetResourceReference(Button.BorderBrushProperty, "AppBorderBrush");
+        button.SetResourceReference(Button.ForegroundProperty, "AppTextBrush");
+        button.Click += (_, args) =>
+        {
+            _isEqualizerExpanded = !_isEqualizerExpanded;
+            RenderEqualizer();
+            args.Handled = true;
+        };
+        return button;
+    }
+
+    private FrameworkElement CreateEqualizerShowMoreContent()
+    {
+        var content = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Center
+        };
+        var label = new TextBlock
+        {
+            Text = _isEqualizerExpanded ? "Show less" : "Show more",
+            FontSize = 12,
+            FontWeight = FontWeights.SemiBold,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        label.SetResourceReference(TextBlock.ForegroundProperty, "AppTextBrush");
+        content.Children.Add(label);
+        content.Children.Add(new ShapePath
+        {
+            Data = Geometry.Parse(_isEqualizerExpanded ? "M 0 4 L 4 0 L 8 4" : "M 0 0 L 4 4 L 8 0"),
+            Stroke = GetBrushResource("AppMutedTextBrush", SystemColors.GrayTextBrush),
+            StrokeThickness = 1.6,
+            Width = 8,
+            Height = 5,
+            Stretch = Stretch.Uniform,
+            Margin = new Thickness(8, 1, 0, 0),
+            VerticalAlignment = VerticalAlignment.Center
+        });
+        return content;
+    }
+
+    private static IReadOnlyList<EqualizerPreviewRow> GetEqualizerPreviewRows() =>
+    [
+        new("Sulfur", 250.0),
+        new("Uranium", -250.0),
+        new("Raw Quartz", 125.0),
+        new("Water", -118.5),
+        new("Bauxite", 92.4),
+        new("Nitrogen", -74.8),
+        new("Iron", 27.7),
+        new("Limestone", 20.5),
+        new("Coal", 13.5),
+        new("Copper", 12.0),
+        new("Crude Oil", 6.5),
+        new("SAM", -5.8),
+        new("Caterium", 4.9),
+        new("Copper", 0),
+        new("Coal", 0),
+        new("Limestone", 0)
+    ];
+
+    private static Brush GetDeviationBrush(double deviationPercent)
+    {
+        var normalized = Math.Clamp(Math.Abs(deviationPercent) / 100.0, 0, 1);
+        var start = (Color)ColorConverter.ConvertFromString("#69d66d");
+        var end = (Color)ColorConverter.ConvertFromString(deviationPercent < 0 ? "#5aa7ff" : "#f05f5f");
+        var color = Color.FromRgb(
+            (byte)(start.R + (end.R - start.R) * normalized),
+            (byte)(start.G + (end.G - start.G) * normalized),
+            (byte)(start.B + (end.B - start.B) * normalized));
+        return ToBrush(color.ToString());
+    }
+
+    private static string FormatDeviation(double deviationPercent) =>
+        $"{(deviationPercent >= 0 ? "+" : string.Empty)}{deviationPercent:0.#}%";
 
     private static void UpdateOverlayCollapseState(FrameworkElement? content, ShapePath? icon, bool isCollapsed)
     {
@@ -1591,4 +1922,13 @@ public partial class MapViewport : UserControl
 
     private static Brush GetBrushResource(string key, Brush fallback) =>
         Application.Current.TryFindResource(key) as Brush ?? fallback;
+
+    private static Brush ToBrush(string color)
+    {
+        var brush = new SolidColorBrush((Color)ColorConverter.ConvertFromString(color));
+        brush.Freeze();
+        return brush;
+    }
+
+    private sealed record EqualizerPreviewRow(string ResourceName, double DeviationPercent);
 }
