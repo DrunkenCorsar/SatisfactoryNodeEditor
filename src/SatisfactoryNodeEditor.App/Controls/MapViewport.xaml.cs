@@ -1,5 +1,7 @@
 using System.Collections;
 using System.Collections.Specialized;
+using System.ComponentModel;
+using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -63,19 +65,34 @@ public partial class MapViewport : UserControl
     private const double GeyserNodeSize = 18;
     private const double MinZoom = 0.08;
     private const double MaxZoom = 8;
+    private const double EqualizerOverlayWidth = 320;
+    private const double EqualizerBarWidth = 104;
     private readonly ResourceNodeStyleProvider _styleProvider = new();
     private readonly List<FrameworkElement> _markerVisuals = [];
     private readonly Dictionary<string, ShapePath> _resourceMarkerVisuals = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _hiddenResourceTypes = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _hiddenPurities = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _hiddenNodeCategories = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<ResourceNodeViewModel> _subscribedEqualizerNodes = [];
+    private readonly HashSet<WellSatelliteViewModel> _subscribedEqualizerSatellites = [];
+    private Dictionary<string, double> _nativeEqualizerTargetWeights = new(StringComparer.OrdinalIgnoreCase);
+    private Dictionary<string, double> _nativeEqualizerTargetWeightsWithoutWells = new(StringComparer.OrdinalIgnoreCase);
+    private Dictionary<string, double>? _defaultEqualizerTargetWeights;
+    private Dictionary<string, double>? _defaultEqualizerTargetWeightsWithoutWells;
+    private bool _isDefaultEqualizerLoading;
     private FrameworkElement? _selectedNodeCard;
     private INotifyCollectionChanged? _notifiedNodes;
     private bool _isLegendCollapsed;
-    private bool _isEqualizerCollapsed = true;
+    private bool _isEqualizerCollapsed;
+    private bool _isEqualizerExpanded;
+    private bool _isEqualizerIncludingWells = true;
+    private bool _isEqualizerShowingZeroValues;
+    private string _selectedEqualizerMode = "Native";
     private bool _isDragging;
     private bool _isBrushPainting;
     private bool _isBrushErasing;
+    private bool _isFitMapToViewportQueued;
+    private bool _isEqualizerRenderQueued;
     private Point _lastDragPoint;
     private Point _lastMousePoint;
     private Point _pendingNodeClickPoint;
@@ -90,12 +107,18 @@ public partial class MapViewport : UserControl
         {
             InputManager.Current.PreProcessInput += InputManager_PreProcessInput;
             RenderLegend();
+            RenderEqualizer();
+            EnsureDefaultEqualizerTargetLoaded();
             UpdateLegendCollapseState();
             UpdateEqualizerCollapseState();
             RenderMap();
-            Dispatcher.BeginInvoke(new Action(FitMapToViewport), System.Windows.Threading.DispatcherPriority.ContextIdle);
+            QueueFitMapToViewport();
         };
-        Unloaded += (_, _) => InputManager.Current.PreProcessInput -= InputManager_PreProcessInput;
+        Unloaded += (_, _) =>
+        {
+            InputManager.Current.PreProcessInput -= InputManager_PreProcessInput;
+            ClearEqualizerNodeSubscriptions();
+        };
         SizeChanged += (_, _) =>
         {
             if (Nodes is null)
@@ -151,8 +174,16 @@ public partial class MapViewport : UserControl
     {
         if (dependencyObject is MapViewport viewport)
         {
+            var shouldResetNativeTarget = ShouldResetNativeEqualizerTarget(args.OldValue, args.NewValue);
             viewport.UpdateCollectionSubscription(args.NewValue);
+            if (shouldResetNativeTarget)
+            {
+                viewport.CaptureNativeEqualizerTarget();
+            }
+
             viewport.RenderMap();
+            viewport.RenderEqualizer();
+            viewport.QueueFitMapToViewport();
         }
     }
 
@@ -172,14 +203,129 @@ public partial class MapViewport : UserControl
             _notifiedNodes = null;
         }
 
+        ClearEqualizerNodeSubscriptions();
         if (newValue is INotifyCollectionChanged notified)
         {
             _notifiedNodes = notified;
             _notifiedNodes.CollectionChanged += Nodes_CollectionChanged;
         }
+
+        SubscribeEqualizerNodes(newValue as IEnumerable);
     }
 
-    private void Nodes_CollectionChanged(object? sender, NotifyCollectionChangedEventArgs e) => RenderMap();
+    private void Nodes_CollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        if (e.OldItems is not null)
+        {
+            foreach (var node in e.OldItems.OfType<ResourceNodeViewModel>())
+            {
+                UnsubscribeEqualizerNode(node);
+            }
+        }
+
+        if (e.NewItems is not null)
+        {
+            SubscribeEqualizerNodes(e.NewItems);
+        }
+
+        RenderMap();
+        RenderEqualizer();
+    }
+
+    private static bool ShouldResetNativeEqualizerTarget(object? oldValue, object? newValue)
+    {
+        var newNodes = (newValue as IEnumerable)?.Cast<ResourceNodeViewModel>().ToArray() ?? [];
+        if (newNodes.Length == 0)
+        {
+            return true;
+        }
+
+        var oldNodes = (oldValue as IEnumerable)?.Cast<ResourceNodeViewModel>().ToHashSet() ?? [];
+        return oldNodes.Count == 0 || !newNodes.Any(oldNodes.Contains);
+    }
+
+    private void CaptureNativeEqualizerTarget()
+    {
+        var nodes = GetCurrentNodes().ToArray();
+        _nativeEqualizerTargetWeights = CalculateEqualizerWeights(nodes, includeWells: true);
+        _nativeEqualizerTargetWeightsWithoutWells = CalculateEqualizerWeights(nodes, includeWells: false);
+    }
+
+    private void SubscribeEqualizerNodes(IEnumerable? nodes)
+    {
+        foreach (var node in nodes?.Cast<ResourceNodeViewModel>() ?? [])
+        {
+            if (!_subscribedEqualizerNodes.Add(node))
+            {
+                continue;
+            }
+
+            node.PropertyChanged += EqualizerNode_PropertyChanged;
+            foreach (var satellite in node.Satellites)
+            {
+                SubscribeEqualizerSatellite(satellite);
+            }
+        }
+    }
+
+    private void UnsubscribeEqualizerNode(ResourceNodeViewModel node)
+    {
+        if (!_subscribedEqualizerNodes.Remove(node))
+        {
+            return;
+        }
+
+        node.PropertyChanged -= EqualizerNode_PropertyChanged;
+        foreach (var satellite in node.Satellites)
+        {
+            UnsubscribeEqualizerSatellite(satellite);
+        }
+    }
+
+    private void ClearEqualizerNodeSubscriptions()
+    {
+        foreach (var node in _subscribedEqualizerNodes.ToArray())
+        {
+            UnsubscribeEqualizerNode(node);
+        }
+
+        foreach (var satellite in _subscribedEqualizerSatellites.ToArray())
+        {
+            UnsubscribeEqualizerSatellite(satellite);
+        }
+    }
+
+    private void SubscribeEqualizerSatellite(WellSatelliteViewModel satellite)
+    {
+        if (_subscribedEqualizerSatellites.Add(satellite))
+        {
+            satellite.PropertyChanged += EqualizerSatellite_PropertyChanged;
+        }
+    }
+
+    private void UnsubscribeEqualizerSatellite(WellSatelliteViewModel satellite)
+    {
+        if (_subscribedEqualizerSatellites.Remove(satellite))
+        {
+            satellite.PropertyChanged -= EqualizerSatellite_PropertyChanged;
+        }
+    }
+
+    private void EqualizerNode_PropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName is nameof(ResourceNodeViewModel.ResourceType) or nameof(ResourceNodeViewModel.Purity) or null or "")
+        {
+            QueueRenderEqualizer();
+        }
+    }
+
+    private void EqualizerSatellite_PropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName is nameof(WellSatelliteViewModel.Purity) or null or "")
+        {
+            QueueRenderEqualizer();
+        }
+    }
 
     private void RenderMap()
     {
@@ -312,7 +458,6 @@ public partial class MapViewport : UserControl
 
     private void EqualizerHeader_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
-        PrepareOverlayWidthForToggle(EqualizerBorder, _isEqualizerCollapsed);
         _isEqualizerCollapsed = !_isEqualizerCollapsed;
         UpdateEqualizerCollapseState();
         e.Handled = true;
@@ -325,8 +470,707 @@ public partial class MapViewport : UserControl
 
     private void UpdateEqualizerCollapseState()
     {
+        if (EqualizerBorder is not null)
+        {
+            EqualizerBorder.Width = EqualizerOverlayWidth;
+        }
+
         UpdateOverlayCollapseState(EqualizerPanel, EqualizerToggleIcon, _isEqualizerCollapsed);
     }
+
+    private void RenderEqualizer()
+    {
+        if (EqualizerPanel is null || EqualizerBorder is null)
+        {
+            return;
+        }
+
+        var allRows = GetEqualizerPreviewRows()
+            .OrderByDescending(row => Math.Abs(row.DeviationPercent))
+            .ToArray();
+        var shouldShowModeSwitch = ShouldShowEqualizerModeSwitch();
+        if (ShouldHideEqualizer(allRows) && !shouldShowModeSwitch)
+        {
+            EqualizerBorder.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        if (!shouldShowModeSwitch &&
+            _selectedEqualizerMode.Equals("Default", StringComparison.OrdinalIgnoreCase))
+        {
+            _selectedEqualizerMode = "Native";
+        }
+
+        EqualizerBorder.Visibility = Visibility.Visible;
+        EqualizerPanel.Children.Clear();
+        EqualizerPanel.Children.Add(CreateEqualizerModeSwitch());
+        EqualizerPanel.Children.Add(new TextBlock
+        {
+            Text = GetEqualizerDescription(),
+            FontSize = 11,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 0, 0, 12)
+        });
+        ((TextBlock)EqualizerPanel.Children[^1]).SetResourceReference(TextBlock.ForegroundProperty, "AppMutedTextBrush");
+
+        var rows = allRows
+            .Where(row => _isEqualizerShowingZeroValues || ShouldShowActionableEqualizerRow(row))
+            .ToArray();
+        foreach (var row in rows.Take(_isEqualizerExpanded ? rows.Length : 5))
+        {
+            EqualizerPanel.Children.Add(CreateEqualizerResourceRow(row));
+        }
+
+        EqualizerPanel.Children.Add(CreateEqualizerShowMoreButton(rows.Length > 5));
+        UpdateEqualizerCollapseState();
+    }
+
+    private void QueueRenderEqualizer()
+    {
+        if (!Dispatcher.CheckAccess())
+        {
+            Dispatcher.BeginInvoke(new Action(QueueRenderEqualizer));
+            return;
+        }
+
+        if (_isEqualizerRenderQueued)
+        {
+            return;
+        }
+
+        _isEqualizerRenderQueued = true;
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            _isEqualizerRenderQueued = false;
+            RenderEqualizer();
+        }), System.Windows.Threading.DispatcherPriority.Background);
+    }
+
+    private static bool ShouldHideEqualizer(IReadOnlyCollection<EqualizerPreviewRow> rows) =>
+        rows.Count > 0 && rows.All(row => Math.Abs(row.DeviationPercent) <= 0.05);
+
+    private bool ShouldShowEqualizerModeSwitch()
+    {
+        var nativeTarget = _isEqualizerIncludingWells
+            ? _nativeEqualizerTargetWeights
+            : _nativeEqualizerTargetWeightsWithoutWells;
+        var defaultTarget = _isEqualizerIncludingWells
+            ? _defaultEqualizerTargetWeights
+            : _defaultEqualizerTargetWeightsWithoutWells;
+        return defaultTarget is null || !AreEqualizerTargetsEquivalent(nativeTarget, defaultTarget);
+    }
+
+    private static bool AreEqualizerTargetsEquivalent(
+        IReadOnlyDictionary<string, double> left,
+        IReadOnlyDictionary<string, double> right)
+    {
+        var leftTotal = left.Values.Sum();
+        var rightTotal = right.Values.Sum();
+        if (leftTotal <= 0 || rightTotal <= 0)
+        {
+            return leftTotal <= 0 && rightTotal <= 0;
+        }
+
+        var resources = left.Keys.Concat(right.Keys).Distinct(StringComparer.OrdinalIgnoreCase);
+        foreach (var resource in resources)
+        {
+            left.TryGetValue(resource, out var leftWeight);
+            right.TryGetValue(resource, out var rightWeight);
+            var leftShare = leftWeight / leftTotal;
+            var rightShare = rightWeight / rightTotal;
+            if (Math.Abs(leftShare - rightShare) > 0.0005)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private FrameworkElement CreateEqualizerModeSwitch()
+    {
+        var shouldShowModeSwitch = ShouldShowEqualizerModeSwitch();
+        var root = new Grid
+        {
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            Margin = new Thickness(0, 0, 0, 12)
+        };
+        root.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        root.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        root.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        root.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+        if (shouldShowModeSwitch)
+        {
+            var switchRoot = new Border
+            {
+                HorizontalAlignment = HorizontalAlignment.Left,
+                Background = GetBrushResource("AppPanelBrush", SystemColors.ControlBrush),
+                BorderBrush = GetBrushResource("AppBorderBrush", SystemColors.ActiveBorderBrush),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(5),
+                Padding = new Thickness(2)
+            };
+
+            var grid = new UniformGrid { Columns = 2 };
+            grid.Children.Add(CreateEqualizerModeButton("Native"));
+            grid.Children.Add(CreateEqualizerModeButton("Default"));
+            switchRoot.Child = grid;
+            Grid.SetColumn(switchRoot, 0);
+            root.Children.Add(switchRoot);
+        }
+
+        var wellButton = CreateEqualizerWellToggleButton();
+        Grid.SetColumn(wellButton, 2);
+        root.Children.Add(wellButton);
+
+        var visibilityButton = CreateEqualizerZeroVisibilityButton();
+        Grid.SetColumn(visibilityButton, 3);
+        root.Children.Add(visibilityButton);
+        return root;
+    }
+
+    private FrameworkElement CreateEqualizerModeButton(string mode)
+    {
+        var isSelected = _selectedEqualizerMode.Equals(mode, StringComparison.OrdinalIgnoreCase);
+        var button = new Button
+        {
+            Content = mode,
+            Padding = new Thickness(9, 5, 9, 5),
+            BorderThickness = new Thickness(0),
+            FontSize = 11,
+            Cursor = Cursors.Hand,
+            Background = isSelected ? ToBrush("#273241") : Brushes.Transparent,
+            Foreground = isSelected ? Brushes.White : GetBrushResource("AppMutedTextBrush", SystemColors.GrayTextBrush)
+        };
+        button.Click += (_, args) =>
+        {
+            _selectedEqualizerMode = mode;
+            if (_selectedEqualizerMode.Equals("Default", StringComparison.OrdinalIgnoreCase))
+            {
+                EnsureDefaultEqualizerTargetLoaded();
+            }
+
+            RenderEqualizer();
+            args.Handled = true;
+        };
+        return button;
+    }
+
+    private FrameworkElement CreateEqualizerWellToggleButton()
+    {
+        var iconBrush = _isEqualizerIncludingWells
+            ? GetBrushResource("AppTextBrush", SystemColors.WindowTextBrush)
+            : GetBrushResource("AppMutedTextBrush", SystemColors.GrayTextBrush);
+        var icon = new Grid
+        {
+            Width = 16,
+            Height = 16
+        };
+        icon.Children.Add(new ShapePath
+        {
+            Data = CreateWellGeometry(16),
+            Fill = Brushes.Transparent,
+            Stroke = iconBrush,
+            StrokeThickness = 1.4,
+            Stretch = Stretch.Uniform,
+            StrokeStartLineCap = PenLineCap.Round,
+            StrokeEndLineCap = PenLineCap.Round,
+            StrokeLineJoin = PenLineJoin.Round
+        });
+        if (!_isEqualizerIncludingWells)
+        {
+            icon.Children.Add(new ShapePath
+            {
+                Data = Geometry.Parse("M 2 14 L 14 2"),
+                Stroke = iconBrush,
+                StrokeThickness = 1.5,
+                Stretch = Stretch.Fill,
+                StrokeStartLineCap = PenLineCap.Round,
+                StrokeEndLineCap = PenLineCap.Round
+            });
+        }
+
+        var button = new Button
+        {
+            Content = icon,
+            Width = 30,
+            Height = 28,
+            Padding = new Thickness(0),
+            Margin = new Thickness(0, 0, 6, 0),
+            BorderThickness = new Thickness(1),
+            Cursor = Cursors.Hand,
+            ToolTip = _isEqualizerIncludingWells ? "Exclude wells from equalizer" : "Include wells in equalizer"
+        };
+        button.SetResourceReference(Button.BackgroundProperty, _isEqualizerIncludingWells ? "AppPanelBrush" : "AppInputBrush");
+        button.SetResourceReference(Button.BorderBrushProperty, "AppBorderBrush");
+        button.Click += (_, args) =>
+        {
+            _isEqualizerIncludingWells = !_isEqualizerIncludingWells;
+            RenderEqualizer();
+            args.Handled = true;
+        };
+        return button;
+    }
+
+    private FrameworkElement CreateEqualizerZeroVisibilityButton()
+    {
+        var icon = new Grid
+        {
+            Width = 17,
+            Height = 12
+        };
+        var iconBrush = _isEqualizerShowingZeroValues
+            ? GetBrushResource("AppTextBrush", SystemColors.WindowTextBrush)
+            : GetBrushResource("AppMutedTextBrush", SystemColors.GrayTextBrush);
+        icon.Children.Add(new ShapePath
+        {
+            Data = Geometry.Parse("M 1 6 C 3.5 2 6 1 8.5 1 C 11 1 13.5 2 16 6 C 13.5 10 11 11 8.5 11 C 6 11 3.5 10 1 6 Z"),
+            Stroke = iconBrush,
+            StrokeThickness = 1.4,
+            Fill = Brushes.Transparent,
+            Stretch = Stretch.Fill,
+            StrokeStartLineCap = PenLineCap.Round,
+            StrokeEndLineCap = PenLineCap.Round,
+            StrokeLineJoin = PenLineJoin.Round
+        });
+        icon.Children.Add(new ShapeEllipse
+        {
+            Width = 4.8,
+            Height = 4.8,
+            Stroke = iconBrush,
+            StrokeThickness = 1.3,
+            Fill = Brushes.Transparent,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center
+        });
+        if (!_isEqualizerShowingZeroValues)
+        {
+            icon.Children.Add(new ShapePath
+            {
+                Data = Geometry.Parse("M 2 11 L 15 1"),
+                Stroke = iconBrush,
+                StrokeThickness = 1.5,
+                Stretch = Stretch.Fill,
+                StrokeStartLineCap = PenLineCap.Round,
+                StrokeEndLineCap = PenLineCap.Round
+            });
+        }
+
+        var button = new Button
+        {
+            Content = icon,
+            Width = 30,
+            Height = 28,
+            Padding = new Thickness(0),
+            BorderThickness = new Thickness(1),
+            Cursor = Cursors.Hand,
+            ToolTip = _isEqualizerShowingZeroValues ? "Hide unchanged resources" : "Show unchanged resources"
+        };
+        button.SetResourceReference(Button.BackgroundProperty, _isEqualizerShowingZeroValues ? "AppPanelBrush" : "AppInputBrush");
+        button.SetResourceReference(Button.BorderBrushProperty, "AppBorderBrush");
+        button.Click += (_, args) =>
+        {
+            _isEqualizerShowingZeroValues = !_isEqualizerShowingZeroValues;
+            RenderEqualizer();
+            args.Handled = true;
+        };
+        return button;
+    }
+
+    private FrameworkElement CreateEqualizerResourceRow(EqualizerPreviewRow row)
+    {
+        var grid = new Grid
+        {
+            Margin = new Thickness(0, 0, 0, 10)
+        };
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(112) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(54) });
+
+        var resource = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        resource.Children.Add(new ShapeEllipse
+        {
+            Width = 11,
+            Height = 11,
+            Fill = _styleProvider.GetResourceBrush(row.ResourceName),
+            Stroke = GetBrushResource("AppBorderBrush", SystemColors.ActiveBorderBrush),
+            StrokeThickness = 0.7,
+            Margin = new Thickness(0, 0, 8, 0)
+        });
+        var name = new TextBlock
+        {
+            Text = row.ResourceName,
+            FontSize = 12,
+            VerticalAlignment = VerticalAlignment.Center,
+            TextTrimming = TextTrimming.CharacterEllipsis
+        };
+        name.SetResourceReference(TextBlock.ForegroundProperty, "AppTextBrush");
+        resource.Children.Add(name);
+        Grid.SetColumn(resource, 0);
+        grid.Children.Add(resource);
+
+        var track = new Border
+        {
+            Width = EqualizerBarWidth,
+            Height = 7,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            VerticalAlignment = VerticalAlignment.Center,
+            Background = ToBrush("#25303a"),
+            CornerRadius = new CornerRadius(4)
+        };
+        var fill = new Border
+        {
+            Width = Math.Abs(row.DeviationPercent) <= 0.05
+                ? 0
+                : Math.Max(4, Math.Min(1, Math.Abs(row.DeviationPercent) / 100.0) * EqualizerBarWidth),
+            Height = 7,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            Background = GetDeviationBrush(row.DeviationPercent),
+            CornerRadius = new CornerRadius(4)
+        };
+        var barGrid = new Grid
+        {
+            Width = EqualizerBarWidth,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        barGrid.Children.Add(track);
+        barGrid.Children.Add(fill);
+        Grid.SetColumn(barGrid, 1);
+        grid.Children.Add(barGrid);
+
+        var value = new TextBlock
+        {
+            Text = FormatDeviation(row.DeviationPercent),
+            FontSize = 11,
+            FontWeight = FontWeights.SemiBold,
+            TextAlignment = TextAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        value.SetResourceReference(TextBlock.ForegroundProperty, "AppTextBrush");
+        Grid.SetColumn(value, 2);
+        grid.Children.Add(value);
+
+        return grid;
+    }
+
+    private FrameworkElement CreateEqualizerShowMoreButton(bool hasMoreRows)
+    {
+        var button = new Button
+        {
+            Content = CreateEqualizerShowMoreContent(),
+            IsEnabled = hasMoreRows,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            Padding = new Thickness(10, 7, 10, 7),
+            Margin = new Thickness(0, 2, 0, 0),
+            BorderThickness = new Thickness(1),
+            Cursor = hasMoreRows ? Cursors.Hand : Cursors.Arrow
+        };
+        button.SetResourceReference(Button.BackgroundProperty, "AppPanelBrush");
+        button.SetResourceReference(Button.BorderBrushProperty, "AppBorderBrush");
+        button.SetResourceReference(Button.ForegroundProperty, "AppTextBrush");
+        button.Click += (_, args) =>
+        {
+            _isEqualizerExpanded = !_isEqualizerExpanded;
+            RenderEqualizer();
+            args.Handled = true;
+        };
+        return button;
+    }
+
+    private FrameworkElement CreateEqualizerShowMoreContent()
+    {
+        var content = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Center
+        };
+        var label = new TextBlock
+        {
+            Text = _isEqualizerExpanded ? "Show less" : "Show more",
+            FontSize = 12,
+            FontWeight = FontWeights.SemiBold,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        label.SetResourceReference(TextBlock.ForegroundProperty, "AppTextBrush");
+        content.Children.Add(label);
+        content.Children.Add(new ShapePath
+        {
+            Data = Geometry.Parse(_isEqualizerExpanded ? "M 0 4 L 4 0 L 8 4" : "M 0 0 L 4 4 L 8 0"),
+            Stroke = GetBrushResource("AppMutedTextBrush", SystemColors.GrayTextBrush),
+            StrokeThickness = 1.6,
+            Width = 8,
+            Height = 5,
+            Stretch = Stretch.Uniform,
+            Margin = new Thickness(8, 1, 0, 0),
+            VerticalAlignment = VerticalAlignment.Center
+        });
+        return content;
+    }
+
+    private string GetEqualizerDescription()
+    {
+        if (_selectedEqualizerMode.Equals("Default", StringComparison.OrdinalIgnoreCase))
+        {
+            if (_isDefaultEqualizerLoading)
+            {
+                return "Loading default world distribution";
+            }
+
+            if (_defaultEqualizerTargetWeights is null)
+            {
+                return "Default world distribution unavailable";
+            }
+
+            return "Most deviated from default world distribution";
+        }
+
+        return "Most deviated from original distribution";
+    }
+
+    private IReadOnlyList<EqualizerPreviewRow> GetEqualizerPreviewRows()
+    {
+        var actualWeights = CalculateEqualizerWeights(GetCurrentNodes(), _isEqualizerIncludingWells);
+        var targetWeights = GetSelectedEqualizerTargetWeights();
+        if (targetWeights is null || targetWeights.Count == 0 || actualWeights.Count == 0)
+        {
+            return [];
+        }
+
+        var actualTotalWeight = actualWeights.Values.Sum();
+        var targetTotalWeight = targetWeights.Values.Sum();
+        if (actualTotalWeight <= 0 || targetTotalWeight <= 0)
+        {
+            return [];
+        }
+
+        var resources = actualWeights.Keys
+            .Concat(targetWeights.Keys)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(resource => resource, StringComparer.OrdinalIgnoreCase);
+        var rows = new List<EqualizerPreviewRow>();
+        foreach (var resource in resources)
+        {
+            actualWeights.TryGetValue(resource, out var actualWeight);
+            targetWeights.TryGetValue(resource, out var targetWeight);
+            if (actualWeight <= 0 && targetWeight <= 0)
+            {
+                continue;
+            }
+
+            var actualShare = actualWeight / actualTotalWeight;
+            var targetShare = targetWeight / targetTotalWeight;
+            var deviation = targetShare <= 0
+                ? 100
+                : ((actualShare - targetShare) / targetShare) * 100;
+            rows.Add(new EqualizerPreviewRow(
+                resource,
+                deviation,
+                actualWeight,
+                targetShare,
+                WouldMinimumCorrectionWorsen(resource, actualWeight, actualTotalWeight, targetShare)));
+        }
+
+        return rows;
+    }
+
+    private IReadOnlyDictionary<string, double>? GetSelectedEqualizerTargetWeights()
+    {
+        if (_selectedEqualizerMode.Equals("Default", StringComparison.OrdinalIgnoreCase))
+        {
+            return _isEqualizerIncludingWells
+                ? _defaultEqualizerTargetWeights
+                : _defaultEqualizerTargetWeightsWithoutWells;
+        }
+
+        return _isEqualizerIncludingWells
+            ? _nativeEqualizerTargetWeights
+            : _nativeEqualizerTargetWeightsWithoutWells;
+    }
+
+    private static bool ShouldShowActionableEqualizerRow(EqualizerPreviewRow row) =>
+        Math.Abs(row.DeviationPercent) > 0.05 && !row.IsMinimumCorrectionWorse;
+
+    private static bool WouldMinimumCorrectionWorsen(
+        string resourceName,
+        double actualWeight,
+        double actualTotalWeight,
+        double targetShare)
+    {
+        if (actualTotalWeight <= 0)
+        {
+            return true;
+        }
+
+        var currentShare = actualWeight / actualTotalWeight;
+        var currentDistance = Math.Abs(currentShare - targetShare);
+        if (currentDistance <= 0.0005)
+        {
+            return true;
+        }
+
+        var minimumWeight = GetMinimumResourceStepWeight(resourceName);
+        var nextWeight = currentShare > targetShare
+            ? Math.Max(0, actualWeight - minimumWeight)
+            : actualWeight + minimumWeight;
+        var nextTotalWeight = currentShare > targetShare
+            ? Math.Max(1, actualTotalWeight - Math.Min(actualWeight, minimumWeight))
+            : actualTotalWeight + minimumWeight;
+        var nextDistance = Math.Abs((nextWeight / nextTotalWeight) - targetShare);
+        return nextDistance > currentDistance;
+    }
+
+    private IEnumerable<ResourceNodeViewModel> GetCurrentNodes() =>
+        Nodes?.Cast<ResourceNodeViewModel>() ?? [];
+
+    private static Dictionary<string, double> CalculateEqualizerWeights(IEnumerable<ResourceNodeViewModel> nodes, bool includeWells)
+    {
+        var weights = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+        foreach (var node in nodes)
+        {
+            if (IsGeyser(node))
+            {
+                continue;
+            }
+
+            var resource = NormalizeEditableResource(node.ResourceType);
+            if (IsEmptyResource(resource) || resource.Equals("Unknown", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (IsWell(node))
+            {
+                if (!includeWells)
+                {
+                    continue;
+                }
+
+                foreach (var satellite in node.Satellites)
+                {
+                    AddWeight(weights, resource, GetWellSatelliteWeight(satellite.Purity));
+                }
+
+                continue;
+            }
+
+            if (CanEditNode(node))
+            {
+                AddWeight(weights, resource, GetOrdinaryNodeWeight(node.Purity));
+            }
+        }
+
+        return weights;
+    }
+
+    private static void AddWeight(IDictionary<string, double> weights, string resource, double weight)
+    {
+        if (weight <= 0)
+        {
+            return;
+        }
+
+        weights.TryGetValue(resource, out var current);
+        weights[resource] = current + weight;
+    }
+
+    private static double GetOrdinaryNodeWeight(string purity) => NormalizeEditablePurity(purity) switch
+    {
+        "Impure" => 2,
+        "Pure" => 8,
+        _ => 4
+    };
+
+    private static double GetWellSatelliteWeight(string purity) => NormalizeEditablePurity(purity) switch
+    {
+        "Impure" => 1,
+        "Pure" => 4,
+        _ => 2
+    };
+
+    private static double GetMinimumResourceStepWeight(string resourceName) =>
+        IsWellOnlyResource(resourceName) ? 1 : 2;
+
+    private static bool IsWellOnlyResource(string resourceName) =>
+        resourceName.Equals("Crude Oil", StringComparison.OrdinalIgnoreCase) ||
+        resourceName.Equals("Water", StringComparison.OrdinalIgnoreCase) ||
+        resourceName.Equals("Nitrogen", StringComparison.OrdinalIgnoreCase);
+
+    private void EnsureDefaultEqualizerTargetLoaded()
+    {
+        if ((_defaultEqualizerTargetWeights is not null &&
+             _defaultEqualizerTargetWeightsWithoutWells is not null) ||
+            _isDefaultEqualizerLoading)
+        {
+            return;
+        }
+
+        _ = LoadDefaultEqualizerTargetAsync();
+    }
+
+    private async Task LoadDefaultEqualizerTargetAsync()
+    {
+        var templatePath = ResolveDefaultTemplateSavePath();
+        if (templatePath is null)
+        {
+            return;
+        }
+
+        _isDefaultEqualizerLoading = true;
+        RenderEqualizer();
+        try
+        {
+            var inspectionService = new ResourceNodeInspectionService(new SatisfactoryMapCoordinateConverter());
+            var result = await inspectionService.InspectNodesAsync(templatePath);
+            if (result.Success)
+            {
+                _defaultEqualizerTargetWeights = CalculateEqualizerWeights(result.Nodes, includeWells: true);
+                _defaultEqualizerTargetWeightsWithoutWells = CalculateEqualizerWeights(result.Nodes, includeWells: false);
+            }
+        }
+        catch
+        {
+            _defaultEqualizerTargetWeights = null;
+            _defaultEqualizerTargetWeightsWithoutWells = null;
+        }
+        finally
+        {
+            _isDefaultEqualizerLoading = false;
+            RenderEqualizer();
+        }
+    }
+
+    private static string? ResolveDefaultTemplateSavePath()
+    {
+        var baseDirectory = AppContext.BaseDirectory;
+        var candidates = new[]
+        {
+            Path.Combine(baseDirectory, "Assets", "Templates", "NodeEditor_Template.sav"),
+            Path.GetFullPath(Path.Combine(baseDirectory, "..", "..", "..", "Assets", "Templates", "NodeEditor_Template.sav"))
+        };
+
+        return candidates.FirstOrDefault(File.Exists);
+    }
+
+    private static Brush GetDeviationBrush(double deviationPercent)
+    {
+        var normalized = Math.Clamp(Math.Abs(deviationPercent) / 100.0, 0, 1);
+        var start = (Color)ColorConverter.ConvertFromString("#69d66d");
+        var end = (Color)ColorConverter.ConvertFromString(deviationPercent < 0 ? "#5aa7ff" : "#f05f5f");
+        var color = Color.FromRgb(
+            (byte)(start.R + (end.R - start.R) * normalized),
+            (byte)(start.G + (end.G - start.G) * normalized),
+            (byte)(start.B + (end.B - start.B) * normalized));
+        return ToBrush(color.ToString());
+    }
+
+    private static string FormatDeviation(double deviationPercent) =>
+        $"{(deviationPercent >= 0 ? "+" : string.Empty)}{deviationPercent:0.#}%";
 
     private static void UpdateOverlayCollapseState(FrameworkElement? content, ShapePath? icon, bool isCollapsed)
     {
@@ -1367,6 +2211,21 @@ public partial class MapViewport : UserControl
         e.Handled = true;
     }
 
+    private void QueueFitMapToViewport()
+    {
+        if (_isFitMapToViewportQueued)
+        {
+            return;
+        }
+
+        _isFitMapToViewportQueued = true;
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            _isFitMapToViewportQueued = false;
+            FitMapToViewport();
+        }), System.Windows.Threading.DispatcherPriority.ContextIdle);
+    }
+
     private void FitMapToViewport()
     {
         var availableWidth = Math.Max(1, ActualWidth - 24);
@@ -1591,4 +2450,18 @@ public partial class MapViewport : UserControl
 
     private static Brush GetBrushResource(string key, Brush fallback) =>
         Application.Current.TryFindResource(key) as Brush ?? fallback;
+
+    private static Brush ToBrush(string color)
+    {
+        var brush = new SolidColorBrush((Color)ColorConverter.ConvertFromString(color));
+        brush.Freeze();
+        return brush;
+    }
+
+    private sealed record EqualizerPreviewRow(
+        string ResourceName,
+        double DeviationPercent,
+        double ActualWeight,
+        double TargetShare,
+        bool IsMinimumCorrectionWorse);
 }
